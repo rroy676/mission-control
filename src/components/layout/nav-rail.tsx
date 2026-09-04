@@ -157,14 +157,17 @@ export function NavRail() {
     })
   }
 
-  // Fetch tenants, OS users, and projects for admin users
+  // Fetch only membership-authorized tenants for every authenticated user.
+  // OS-user provisioning remains admin-only.
   useEffect(() => {
-    if (isAdmin) {
+    if (currentUser) {
       fetchTenants()
-      fetchOsUsers()
       fetchProjects()
     }
-  }, [isAdmin, fetchTenants, fetchOsUsers, fetchProjects])
+    if (isAdmin) {
+      fetchOsUsers()
+    }
+  }, [currentUser, isAdmin, fetchTenants, fetchOsUsers, fetchProjects])
 
   // Re-fetch projects and clear active project when tenant changes
   useEffect(() => {

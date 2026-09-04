@@ -1551,6 +1551,71 @@ const migrations: Migration[] = [
       }
     }
   }
+  ,{
+    id: '056_tenant_memberships_context',
+    up(db: Database.Database) {
+      // Establish the v1.2 tenant identity without replacing the existing
+      // workspace/tenant tables used by the current hub.
+      const tenantCols = db.prepare(`PRAGMA table_info(tenants)`).all() as Array<{ name: string }>
+      if (!tenantCols.some((c) => c.name === 'tenant_key')) {
+        db.exec(`ALTER TABLE tenants ADD COLUMN tenant_key TEXT`)
+      }
+      const tenants = db.prepare(`SELECT id, slug FROM tenants ORDER BY id`).all() as Array<{ id: number; slug: string }>
+      const setTenantKey = db.prepare(`UPDATE tenants SET tenant_key = ? WHERE id = ?`)
+      for (const tenant of tenants) {
+        const key = `tnt_${createHash('sha256').update(`${tenant.id}:${tenant.slug}`).digest('hex').slice(0, 32)}`
+        setTenantKey.run(key, tenant.id)
+      }
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_tenant_key ON tenants(tenant_key)`)
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS tenant_memberships (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          tenant_id INTEGER NOT NULL,
+          role TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'operator', 'viewer')),
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          UNIQUE(user_id, tenant_id),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_tenant_memberships_user ON tenant_memberships(user_id);
+        CREATE INDEX IF NOT EXISTS idx_tenant_memberships_tenant ON tenant_memberships(tenant_id);
+      `)
+
+      // Existing users are assigned only to the tenant owning their current
+      // workspace. This is deterministic and does not create new tenants.
+      db.exec(`
+        INSERT OR IGNORE INTO tenant_memberships (user_id, tenant_id, role)
+        SELECT u.id, w.tenant_id,
+          CASE WHEN u.username = 'hermes' AND u.role = 'admin' THEN 'owner'
+               WHEN u.role = 'admin' THEN 'admin'
+               WHEN u.role = 'operator' THEN 'operator'
+               ELSE 'viewer' END
+        FROM users u
+        JOIN workspaces w ON w.id = COALESCE(u.workspace_id, 1)
+        WHERE w.tenant_id IS NOT NULL
+      `)
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS tenant_authorization_audit (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          actor_user_id INTEGER,
+          actor TEXT NOT NULL,
+          requested_tenant_key TEXT,
+          effective_tenant_key TEXT,
+          operation_class TEXT NOT NULL,
+          decision TEXT NOT NULL CHECK (decision IN ('allow', 'deny')),
+          reason_code TEXT NOT NULL,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_tenant_auth_audit_created ON tenant_authorization_audit(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_tenant_auth_audit_actor ON tenant_authorization_audit(actor_user_id, created_at DESC);
+      `)
+    }
+  }
 ]
 
 export function runMigrations(db: Database.Database) {

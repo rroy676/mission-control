@@ -395,10 +395,11 @@ export function createTenantAndBootstrapJob(request: TenantBootstrapRequest, act
 
   const inserted = db.transaction(() => {
     const tenantRes = db.prepare(`
-      INSERT INTO tenants (slug, display_name, linux_user, plan_tier, status, openclaw_home, workspace_root, gateway_port, dashboard_port, config, created_by, owner_gateway)
-      VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tenants (slug, tenant_key, display_name, linux_user, plan_tier, status, openclaw_home, workspace_root, gateway_port, dashboard_port, config, created_by, owner_gateway)
+      VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)
     `).run(
       slug,
+      `tnt_${randomUUID().replace(/-/g, '').slice(0, 32)}`,
       displayName,
       linuxUser,
       planTier,
@@ -412,6 +413,11 @@ export function createTenantAndBootstrapJob(request: TenantBootstrapRequest, act
     )
 
     const tenantId = Number(tenantRes.lastInsertRowid)
+
+    const actorUser = db.prepare('SELECT id FROM users WHERE username = ? LIMIT 1').get(actor) as { id: number } | undefined
+    if (actorUser) {
+      db.prepare(`INSERT OR IGNORE INTO tenant_memberships (user_id, tenant_id, role) VALUES (?, ?, 'owner')`).run(actorUser.id, tenantId)
+    }
 
     const plan = buildBootstrapPlan({
       slug,

@@ -311,12 +311,15 @@ export interface CurrentUser {
 // Billing/provisioning entity that can own multiple Mission Control workspaces.
 export interface Tenant {
   id: number
+  tenant_key?: string
   slug: string
   display_name: string
   status: string
   linux_user: string
   gateway_port?: number | null
   owner_gateway?: string
+  membershipRole?: 'owner' | 'admin' | 'operator' | 'viewer'
+  active?: boolean
 }
 
 export interface OsUser {
@@ -831,6 +834,14 @@ export const useMissionControl = create<MissionControlStore>()(
     tenants: [],
     osUsers: [],
     setActiveTenant: (tenant) => {
+      // The server is authoritative. Local storage is retained only as a
+      // display cache and is never sufficient to grant tenant access.
+      if (tenant?.tenant_key) {
+        void apiFetch('/api/tenants', {
+          method: 'POST',
+          body: JSON.stringify({ tenant_key: tenant.tenant_key }),
+        }).catch(() => undefined)
+      }
       try {
         if (tenant) {
           localStorage.setItem('mc-active-tenant', JSON.stringify(tenant))
@@ -843,11 +854,12 @@ export const useMissionControl = create<MissionControlStore>()(
     setTenants: (tenants) => set({ tenants }),
     fetchTenants: async () => {
       try {
-        const data = await apiFetch<{ tenants?: Tenant[] }>('/api/super/tenants', {
+        const data = await apiFetch<{ tenants?: Tenant[]; active_tenant?: Tenant | null }>('/api/tenants', {
           cache: 'no-store',
         })
         const tenantList = Array.isArray(data?.tenants) ? data.tenants : []
-        set({ tenants: tenantList })
+        set({ tenants: tenantList, activeTenant: data.active_tenant || null })
+        if (data.active_tenant) localStorage.setItem('mc-active-tenant', JSON.stringify(data.active_tenant))
       } catch {}
     },
     fetchOsUsers: async () => {

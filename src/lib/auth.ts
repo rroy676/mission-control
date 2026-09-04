@@ -71,6 +71,8 @@ export interface User {
   agent_name?: string | null
   /** Numeric agent DB id — set only when authenticated via an agent-scoped API key */
   agent_id?: number | null
+  /** Present only for cookie-authenticated requests; API keys cannot switch tenants. */
+  sessionId?: number
 }
 
 export interface UserSession {
@@ -340,7 +342,20 @@ export function createUser(
     workspaceId,
   )
 
-  return getUserById(Number(result.lastInsertRowid))!
+  const createdUserId = Number(result.lastInsertRowid)
+  // Membership is explicit after migration 056. New users inherit access to
+  // the workspace's tenant only; they do not receive platform-wide access.
+  try {
+    const tenant = db.prepare('SELECT tenant_id FROM workspaces WHERE id = ?').get(workspaceId) as { tenant_id?: number } | undefined
+    if (tenant?.tenant_id) {
+      const membershipRole = username === 'hermes' && role === 'admin' ? 'owner' : role === 'admin' ? 'admin' : role
+      db.prepare(`INSERT OR IGNORE INTO tenant_memberships (user_id, tenant_id, role) VALUES (?, ?, ?)`)
+        .run(createdUserId, tenant.tenant_id, membershipRole)
+    }
+  } catch {
+    // Fresh-install compatibility: migration 056 may not exist yet.
+  }
+  return getUserById(createdUserId)!
 }
 
 export function updateUser(id: number, updates: { display_name?: string; role?: User['role']; password?: string; email?: string | null; avatar_url?: string | null; is_approved?: 0 | 1 }): User | null {
