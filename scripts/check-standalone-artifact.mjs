@@ -17,6 +17,7 @@ const allowedRoots = new Set([
   'package.json',
   'public',
   'server.js',
+  'server.pid',
   'src',
 ])
 const forbiddenNames = [

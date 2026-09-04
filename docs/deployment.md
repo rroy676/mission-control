@@ -598,4 +598,21 @@ Once deployed, set up your agents and orchestration:
 - **[Quickstart](quickstart.md)** — Register your first agent and complete a task in 5 minutes
 - **[Agent Setup](agent-setup.md)** — SOUL personalities, heartbeats, config sync, agent sources
 - **[Orchestration Patterns](orchestration.md)** — Auto-dispatch, quality review, multi-agent workflows
+
+### Authentication persistence
+
+After first-run provisioning, the local SQLite database at
+`MISSION_CONTROL_DATA_DIR/mission-control.db` is the authority for the
+`hermes` credential. `AUTH_USER`/`AUTH_PASS` (or `AUTH_PASS_B64`) are only
+bootstrap/diagnostic inputs; rebuilds and restarts never overwrite an existing
+user row. Check the non-secret invariant with `pnpm auth:health`; add
+`--verify-seed` to return a `MATCH`/`MISMATCH` comparison without printing a
+password or hash. An explicit password change is:
+
+```sh
+MC_ADMIN_PASSWORD='...' node scripts/reset-local-admin.mjs --from-env
+```
+
+Run it only as an operator action against the intended runtime DB. It is never
+called by build, start, or deploy.
 - **[CLI Reference](cli-agent-control.md)** — Full CLI command list for headless/scripted usage
