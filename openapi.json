@@ -98,6 +98,23 @@
     }
   ],
   "paths": {
+    "/api/tenants": {"get":{"tags":["Super Admin"],"summary":"List authorized tenants","responses":{"200":{"description":"Tenants"}}},"post":{"tags":["Super Admin"],"summary":"Select active tenant","responses":{"200":{"description":"Selected tenant"}}}},
+    "/api/model-catalog": {"get":{"tags":["Admin"],"summary":"List global model catalog","responses":{"200":{"description":"Model catalog"}}}},
+    "/api/model-profiles": {"get":{"tags":["Admin"],"summary":"List tenant model profiles","responses":{"200":{"description":"Profiles"}}},"post":{"tags":["Admin"],"summary":"Create tenant model profile","responses":{"201":{"description":"Created"}}}},
+    "/api/model-profiles/{id}": {"patch":{"tags":["Admin"],"summary":"Update tenant model profile","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"integer"}}],"responses":{"200":{"description":"Updated"}}},"delete":{"tags":["Admin"],"summary":"Delete tenant model profile","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"integer"}}],"responses":{"200":{"description":"Deleted"}}}},
+    "/api/model-profiles/credentials": {"post":{"tags":["Admin"],"summary":"Create credential reference","responses":{"201":{"description":"Created"}}}},
+    "/api/autonomous-company": {"get":{"tags":["Monitoring"],"summary":"Get autonomous-company status","responses":{"200":{"description":"Status"}}}},
+    "/api/autonomous-company/control": {"post":{"tags":["Admin"],"summary":"Submit bounded autonomous-company control request","responses":{"202":{"description":"Accepted"}}}},
+    "/api/memory/working": {
+      "get": {"tags":["Memory"],"summary":"List tenant working memory","parameters":[{"name":"tenant_key","in":"query","schema":{"type":"string"}},{"name":"project_id","in":"query","schema":{"type":"string"}},{"name":"agent_id","in":"query","schema":{"type":"string"}},{"name":"task_id","in":"query","schema":{"type":"string"}},{"name":"memory_type","in":"query","schema":{"type":"string"}},{"name":"limit","in":"query","schema":{"type":"integer","maximum":100}}],"responses":{"200":{"description":"Working memory"}}},
+      "post": {"tags":["Memory"],"summary":"Create tenant working memory","requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/PortableMemoryInput"}}}},"responses":{"201":{"description":"Created"},"400":{"$ref":"#/components/responses/BadRequest"}}}
+    },
+    "/api/memory/working/{id}": {
+      "get":{"tags":["Memory"],"summary":"Get exact portable memory item","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Memory item"},"404":{"$ref":"#/components/responses/NotFound"}}},
+      "patch":{"tags":["Memory"],"summary":"Update memory lifecycle","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object"}}}},"responses":{"200":{"description":"Updated"}}}
+    },
+    "/api/memory/handoffs": {"post":{"tags":["Memory"],"summary":"Create structured tenant handoff","requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object"}}}},"responses":{"201":{"description":"Created"}}}},
+    "/api/memory/handoffs/{id}": {"patch":{"tags":["Memory"],"summary":"Update handoff status","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object"}}}},"responses":{"200":{"description":"Updated"}}}},
     "/api/activities": {
       "get": {
         "tags": [

@@ -22,8 +22,8 @@ export async function GET(request: NextRequest) {
   const since = searchParams.get('since')
   const until = searchParams.get('until')
 
-  const conditions: string[] = ['workspace_id = ?']
-  const params: any[] = [auth.user.workspace_id ?? 1]
+  const conditions: string[] = ['(tenant_id = ? OR (tenant_id IS NULL AND workspace_id = ?))']
+  const params: any[] = [auth.user.tenant_id ?? 1, auth.user.workspace_id ?? 1]
 
   if (action) {
     conditions.push('action = ?')

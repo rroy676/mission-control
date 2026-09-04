@@ -548,26 +548,26 @@ export function logAuditEvent(event: {
   ip_address?: string
   user_agent?: string
   workspace_id?: number
+  tenant_id?: number
 }) {
   const db = getDatabase()
   const actorWorkspace = event.actor_id
     ? db.prepare('SELECT workspace_id FROM users WHERE id = ?').get(event.actor_id) as { workspace_id?: number } | undefined
     : undefined
   const workspaceId = event.workspace_id ?? actorWorkspace?.workspace_id ?? 1
-  db.prepare(`
-    INSERT INTO audit_log (action, actor, actor_id, target_type, target_id, detail, ip_address, user_agent, workspace_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    event.action,
-    event.actor,
-    event.actor_id ?? null,
-    event.target_type ?? null,
-    event.target_id ?? null,
-    event.detail ? JSON.stringify(event.detail) : null,
-    event.ip_address ?? null,
-    event.user_agent ?? null,
-    workspaceId,
-  )
+  if (event.tenant_id === undefined) {
+    // Preserve the established helper contract for existing callers and test
+    // doubles; tenant-aware memory events use the extended insert below.
+    db.prepare(`
+      INSERT INTO audit_log (action, actor, actor_id, target_type, target_id, detail, ip_address, user_agent, workspace_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(event.action, event.actor, event.actor_id ?? null, event.target_type ?? null, event.target_id ?? null, event.detail ? JSON.stringify(event.detail) : null, event.ip_address ?? null, event.user_agent ?? null, workspaceId)
+  } else {
+    db.prepare(`
+      INSERT INTO audit_log (action, actor, actor_id, target_type, target_id, detail, ip_address, user_agent, workspace_id, tenant_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(event.action, event.actor, event.actor_id ?? null, event.target_type ?? null, event.target_id ?? null, event.detail ? JSON.stringify(event.detail) : null, event.ip_address ?? null, event.user_agent ?? null, workspaceId, event.tenant_id)
+  }
 
   // Broadcast audit events (webhooks listen here too)
   const securityEvents = ['login_failed', 'user_created', 'user_deleted', 'password_change']

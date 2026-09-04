@@ -1711,6 +1711,56 @@ const migrations: Migration[] = [
       `)
       for (const row of catalog) insert.run(...row)
     }
+  },
+  {
+    id: '058_portable_working_memory',
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS working_memory (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          memory_id TEXT NOT NULL UNIQUE,
+          schema_version TEXT NOT NULL,
+          tenant_id INTEGER NOT NULL,
+          project_id INTEGER,
+          agent_id INTEGER,
+          task_id INTEGER,
+          memory_type TEXT NOT NULL CHECK (memory_type IN ('current_state','handoff','task_outcome','recent_decision','incident_context','product_context','operational_note','blocker','lesson_candidate','promotion_candidate')),
+          scope TEXT NOT NULL CHECK (scope IN ('tenant/company','project','agent','task')),
+          title TEXT NOT NULL,
+          content TEXT NOT NULL,
+          source TEXT NOT NULL,
+          importance TEXT NOT NULL CHECK (importance IN ('low','normal','high','critical')),
+          lifecycle_status TEXT NOT NULL CHECK (lifecycle_status IN ('active','superseded','resolved','expired','archived')) DEFAULT 'active',
+          promotion_status TEXT NOT NULL CHECK (promotion_status IN ('none','promotion-candidate','promoted')) DEFAULT 'none',
+          durable_reference TEXT,
+          metadata TEXT NOT NULL DEFAULT '{}',
+          source_agent TEXT,
+          destination_agent TEXT,
+          objective TEXT,
+          relevant_context TEXT,
+          constraints TEXT,
+          source_references TEXT NOT NULL DEFAULT '[]',
+          expected_result TEXT,
+          handoff_status TEXT CHECK (handoff_status IN ('pending','in_progress','completed','cancelled')),
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          expires_at INTEGER,
+          completed_at INTEGER,
+          FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_working_memory_tenant_updated ON working_memory(tenant_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_working_memory_scope ON working_memory(tenant_id, scope, lifecycle_status);
+        CREATE INDEX IF NOT EXISTS idx_working_memory_project ON working_memory(tenant_id, project_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_working_memory_type ON working_memory(tenant_id, memory_type, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_working_memory_source ON working_memory(tenant_id, source);
+      `)
+      const auditCols = db.prepare('PRAGMA table_info(audit_log)').all() as Array<{ name: string }>
+      if (!auditCols.some((c) => c.name === 'tenant_id')) db.exec('ALTER TABLE audit_log ADD COLUMN tenant_id INTEGER')
+      const activityCols = db.prepare('PRAGMA table_info(activities)').all() as Array<{ name: string }>
+      if (!activityCols.some((c) => c.name === 'tenant_id')) db.exec('ALTER TABLE activities ADD COLUMN tenant_id INTEGER')
+      db.exec('CREATE INDEX IF NOT EXISTS idx_audit_log_tenant_created ON audit_log(tenant_id, created_at DESC)')
+      db.exec('CREATE INDEX IF NOT EXISTS idx_activities_tenant_created ON activities(tenant_id, created_at DESC)')
+    }
   }
 ]
 

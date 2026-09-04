@@ -17,11 +17,11 @@ export async function GET(request: NextRequest) {
     
     // Route to stats endpoint if requested
     if (pathname.endsWith('/stats') || searchParams.has('stats')) {
-      return handleStatsRequest(request, workspaceId);
+      return handleStatsRequest(request, workspaceId, auth.user.tenant_id ?? 1);
     }
     
     // Default activities endpoint
-    return handleActivitiesRequest(request, workspaceId);
+    return handleActivitiesRequest(request, workspaceId, auth.user.tenant_id ?? 1);
   } catch (error) {
     logger.error({ err: error }, 'GET /api/activities error');
     return NextResponse.json({ error: 'Failed to process request' }, { status: 500 });
@@ -31,7 +31,7 @@ export async function GET(request: NextRequest) {
 /**
  * Handle regular activities request
  */
-async function handleActivitiesRequest(request: NextRequest, workspaceId: number) {
+async function handleActivitiesRequest(request: NextRequest, workspaceId: number, tenantId: number) {
   try {
     const db = getDatabase();
     const { searchParams } = new URL(request.url);
@@ -45,8 +45,8 @@ async function handleActivitiesRequest(request: NextRequest, workspaceId: number
     const since = searchParams.get('since'); // Unix timestamp for real-time updates
     
     // Build dynamic query
-    let query = 'SELECT * FROM activities WHERE workspace_id = ?';
-    const params: any[] = [workspaceId];
+    let query = 'SELECT * FROM activities WHERE (tenant_id = ? OR (tenant_id IS NULL AND workspace_id = ?))';
+    const params: any[] = [tenantId, workspaceId];
     
     if (type) {
       const types = type.split(',').map(t => t.trim()).filter(Boolean);
@@ -134,8 +134,8 @@ async function handleActivitiesRequest(request: NextRequest, workspaceId: number
     });
     
     // Get total count for pagination
-    let countQuery = 'SELECT COUNT(*) as total FROM activities WHERE workspace_id = ?';
-    const countParams: any[] = [workspaceId];
+    let countQuery = 'SELECT COUNT(*) as total FROM activities WHERE (tenant_id = ? OR (tenant_id IS NULL AND workspace_id = ?))';
+    const countParams: any[] = [tenantId, workspaceId];
     
     if (type) {
       const types = type.split(',').map(t => t.trim()).filter(Boolean);
@@ -179,7 +179,7 @@ async function handleActivitiesRequest(request: NextRequest, workspaceId: number
 /**
  * Handle stats request
  */
-async function handleStatsRequest(request: NextRequest, workspaceId: number) {
+async function handleStatsRequest(request: NextRequest, workspaceId: number, tenantId: number) {
   try {
     const db = getDatabase();
     const { searchParams } = new URL(request.url);

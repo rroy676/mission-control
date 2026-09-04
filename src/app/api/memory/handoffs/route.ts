@@ -1,0 +1,6 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { requireRole, getUserFromRequest } from '@/lib/auth'
+import { createHandoff } from '@/lib/working-memory'
+import { z } from 'zod'
+const handoff=z.object({project_id:z.string().nullable().optional(),source_agent:z.string().trim().min(1).max(120),destination_agent:z.string().trim().min(1).max(120),objective:z.string().trim().min(1).max(4000),relevant_context:z.string().trim().min(1).max(12000),constraints:z.string().max(4000).optional(),source_references:z.array(z.string().max(500)).max(20).optional(),expected_result:z.string().trim().min(1).max(4000),model_profile_id:z.number().int().positive().nullable().optional()}).strict()
+export async function POST(request:NextRequest){const auth=requireRole(request,'operator');if('error'in auth)return NextResponse.json({error:auth.error},{status:auth.status});const user=getUserFromRequest(request);if(!user)return NextResponse.json({error:'Authentication required'},{status:401});try{return NextResponse.json({handoff:createHandoff(user,handoff.parse(await request.json()),request.nextUrl.searchParams.get('tenant_key'))},{status:201})}catch(e){return NextResponse.json({error:e instanceof z.ZodError?'Invalid handoff payload':e instanceof Error?e.message:'Handoff creation failed'},{status:e instanceof z.ZodError?400:403})}}
