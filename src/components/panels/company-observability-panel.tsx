@@ -25,7 +25,7 @@ export function CompanyObservabilityPanel() {
   const gates = Object.entries(status.blueprint || {})
   const pause = async () => {
     setPending(true); setControl('PAUSE request pending…')
-    try { const result = await apiFetch<any>('/api/autonomous-company/control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'pause', requested_by: 'CEO', reason: 'CEO requested PAUSE from Mission Control', request_id: `mc-${crypto.randomUUID()}` }) }); setControl(result.mode === 'PAUSED' ? 'PAUSE accepted; authority is PAUSED' : `PAUSE result: ${result.reason || result.status}`) }
+    try { const result = await apiFetch<any>('/api/autonomous-company/control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'pause', requested_by: 'CEO', reason: 'CEO requested PAUSE from Mission Control', request_id: `mc-${crypto.randomUUID()}` }) }); setControl(result.allow && result.equivalence ? 'PAUSE accepted by reference; authority is PAUSED' : `PAUSE shadow result: ${result.reason_code || 'rejected'}`) }
     catch (e: any) { setControl(`PAUSE failed: ${e?.message || 'Hermes unavailable'}`) }
     finally { setPending(false); setTimeout(() => window.location.reload(), 500) }
   }
