@@ -31,6 +31,7 @@ const navGroups: NavGroup[] = [
     id: 'core',
     items: [
       { id: 'overview', label: 'Overview', icon: <OverviewIcon />, priority: true, essential: true },
+      { id: 'company-observability', label: 'Company', icon: <MonitorIcon />, priority: true, essential: true },
       { id: 'agents', label: 'Agents', icon: <AgentsIcon />, priority: true, essential: true },
       { id: 'tasks', label: 'Tasks', icon: <TasksIcon />, priority: true, essential: true },
       { id: 'chat', label: 'Chat', icon: <ChatIcon />, priority: false, essential: true },
@@ -86,6 +87,7 @@ const navGroups: NavGroup[] = [
 // Map nav item IDs to translation keys in the 'nav' namespace
 const navItemTranslationKeys: Record<string, string> = {
   overview: 'overview',
+  'company-observability': 'overview',
   agents: 'agents',
   tasks: 'tasks',
   chat: 'chat',
@@ -123,6 +125,12 @@ const groupTranslationKeys: Record<string, string> = {
 const gatewayOnlyPanels = new Set([
   'gateways', 'gateway-config', 'channels', 'nodes', 'exec-approvals',
   ...getPluginNavItems().filter(pi => pi.gatewayOnly).map(pi => pi.id),
+])
+const observabilityOnlyPanels = new Set([
+  'chat', 'channels', 'skills', 'memory', 'logs', 'cost-tracker', 'nodes',
+  'exec-approvals', 'office', 'monitor', 'cron', 'webhooks', 'alerts', 'github',
+  'security', 'users', 'audit', 'gateway-parent', 'gateways', 'gateway-config',
+  'integrations', 'debug', 'settings',
 ])
 const adminOnlyPanels = new Set<string>([])
 
@@ -177,7 +185,7 @@ export function NavRail() {
   // In essential mode, hide non-essential panels.
   const isEssential = interfaceMode === 'essential'
   function filterItems(items: NavItem[]): NavItem[] {
-    return items
+    return items.filter(i => !observabilityOnlyPanels.has(i.id))
       .map(i => {
         if (i.children) {
           const filteredChildren = filterItems(i.children)
