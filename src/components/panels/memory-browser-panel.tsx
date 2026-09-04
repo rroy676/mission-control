@@ -57,6 +57,10 @@ interface ProcessingResult {
   suggestions: string[]
 }
 
+interface WorkingMemoryRecord {
+  memory_id: string; project_id?: string | null; agent_id?: string | null; memory_type: string; scope: string; title: string; content: string; source: string; importance: string; lifecycle_status: string; promotion_status: string; created_at: number; updated_at: number; source_agent?: string; destination_agent?: string; objective?: string; expected_result?: string; status?: string
+}
+
 function formatFileSize(bytes: number): string {
   if (bytes === 0) return '0 B'
   const k = 1024
@@ -98,6 +102,15 @@ function statusBg(status: 'healthy' | 'warning' | 'critical'): string {
   return 'bg-red-500'
 }
 
+function WorkingMemoryView({ records, tenantName, activeProject, filters, onFilter, onRefresh, isLoading }: { records: WorkingMemoryRecord[]; tenantName: string; activeProject?: string; filters: { type: string; lifecycle: string; promotion: string; project: string }; onFilter: (key: string, value: string) => void; onRefresh: () => void; isLoading: boolean }) {
+  const select = (key: string, value: string, children: string[]) => <select value={value} onChange={(event) => onFilter(key, event.target.value)} className="px-2 py-1 text-xs font-mono bg-[hsl(var(--surface-1))] border border-border/50 rounded text-foreground"><option value="">{key}</option>{children.map((item) => <option key={item} value={item}>{item.replaceAll('_', ' ')}</option>)}</select>
+  return <div className="flex-1 overflow-auto p-4 md:p-6">
+    <div className="flex flex-wrap items-center gap-2 mb-4"><div className="mr-auto"><div className="text-xs text-muted-foreground/60 font-mono">STRUCTURED WORKING MEMORY</div><div className="text-lg font-medium text-foreground">{tenantName}</div>{activeProject && <div className="text-xs text-muted-foreground">Project context: {activeProject}</div>}</div><button onClick={onRefresh} className="px-2 py-1 text-xs font-mono text-muted-foreground hover:text-foreground rounded hover:bg-[hsl(var(--surface-2))]">Refresh</button></div>
+    <div className="flex flex-wrap gap-2 mb-4">{select('type', filters.type, ['current_state','handoff','task_outcome','recent_decision','incident_context','product_context','operational_note','blocker','lesson_candidate','promotion_candidate'])}{select('lifecycle', filters.lifecycle, ['active','superseded','resolved','expired','archived'])}{select('promotion', filters.promotion, ['none','promotion-candidate','promoted'])}<input value={filters.project} onChange={(event) => onFilter('project', event.target.value)} placeholder="project id" className="w-28 px-2 py-1 text-xs font-mono bg-[hsl(var(--surface-1))] border border-border/50 rounded text-foreground" /></div>
+    {isLoading ? <div className="py-12 text-center text-xs font-mono text-muted-foreground">Loading working memory…</div> : records.length === 0 ? <div className="py-12 text-center text-xs font-mono text-muted-foreground/60">No structured memory matches these filters.</div> : <div className="space-y-2">{records.map((item) => <article key={item.memory_id} className={`p-3 rounded border ${item.memory_type === 'current_state' && item.lifecycle_status === 'active' ? 'border-primary/50 bg-primary/5' : 'border-border/50 bg-[hsl(var(--surface-1))]'}`}><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-medium text-foreground">{item.title}</span>{item.memory_type === 'current_state' && item.lifecycle_status === 'active' && <span className="text-[10px] uppercase font-mono text-primary">CURRENT</span>}<span className="ml-auto text-[10px] font-mono text-muted-foreground">{item.memory_type} · {item.scope}</span></div>{item.memory_type === 'handoff' && <div className="mt-1 text-xs font-mono text-primary/80">{item.source_agent} → {item.destination_agent} · {item.status || 'pending'}</div>}<p className="mt-2 text-sm text-foreground/70 whitespace-pre-wrap line-clamp-3">{item.objective || item.content}</p><div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-mono text-muted-foreground/60"><span>{item.lifecycle_status}</span><span>{item.promotion_status}</span><span>importance: {item.importance}</span><span>updated {new Date(item.updated_at * 1000).toLocaleString()}</span>{item.project_id && <span>project: {item.project_id}</span>}</div></article>)}</div>}
+  </div>
+}
+
 export function MemoryBrowserPanel() {
   const t = useTranslations('memoryBrowser')
   const {
@@ -111,7 +124,7 @@ export function MemoryBrowserPanel() {
     setSelectedMemoryFile,
     setMemoryContent,
     setMemoryFileLinks,
-    setMemoryHealth
+    setMemoryHealth, activeTenant, activeProject
   } = useMissionControl()
   const isLocal = dashboardMode === 'local'
 
@@ -125,7 +138,10 @@ export function MemoryBrowserPanel() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
-  const [activeView, setActiveView] = useState<'files' | 'graph' | 'health' | 'pipeline' | 'hermes'>(!isLocal ? 'graph' : 'files')
+  const [activeView, setActiveView] = useState<'files' | 'graph' | 'health' | 'pipeline' | 'hermes' | 'working'>('working')
+  const [workingMemory, setWorkingMemory] = useState<WorkingMemoryRecord[]>([])
+  const [workingFilters, setWorkingFilters] = useState({ type: '', lifecycle: '', promotion: '', project: '' })
+  const [workingLoading, setWorkingLoading] = useState(false)
   const [hermesMemory, setHermesMemory] = useState<{ agentMemory: string | null; userMemory: string | null; agentMemorySize: number; userMemorySize: number; agentMemoryEntries: number; userMemoryEntries: number } | null>(null)
   const [hermesInstalled, setHermesInstalled] = useState<boolean | null>(null)
   const [isLoadingHermes, setIsLoadingHermes] = useState(false)
@@ -179,6 +195,25 @@ export function MemoryBrowserPanel() {
   useEffect(() => {
     loadFileTree()
   }, [loadFileTree])
+
+  const loadWorkingMemory = useCallback(async () => {
+    setWorkingLoading(true)
+    try {
+      const params = new URLSearchParams({ limit: '100' })
+      if (activeTenant?.tenant_key) params.set('tenant_key', activeTenant.tenant_key)
+      const data = await apiFetch<{ memories?: WorkingMemoryRecord[] }>(`/api/memory/working?${params}`)
+      setWorkingMemory(data.memories || [])
+    } catch (error) { log.error('Failed to load structured working memory:', error) } finally { setWorkingLoading(false) }
+  }, [activeTenant?.tenant_key])
+
+  useEffect(() => { if (activeView === 'working') void loadWorkingMemory() }, [activeView, loadWorkingMemory])
+
+  const filteredWorkingMemory = useMemo(() => workingMemory.filter((item) =>
+    (!workingFilters.type || item.memory_type === workingFilters.type) &&
+    (!workingFilters.lifecycle || item.lifecycle_status === workingFilters.lifecycle) &&
+    (!workingFilters.promotion || item.promotion_status === workingFilters.promotion) &&
+    (!workingFilters.project || item.project_id === workingFilters.project)
+  ), [workingMemory, workingFilters])
 
   const filteredFiles = useMemo(() => {
     if (fileFilter === 'all') return memoryFiles
@@ -517,7 +552,7 @@ export function MemoryBrowserPanel() {
     return elements
   }
 
-  const viewTabs = ['files', ...(!isLocal ? ['graph'] : []), 'health', 'pipeline', ...(hermesInstalled ? ['hermes'] : [])] as const
+  const viewTabs = ['working', 'files', ...(!isLocal ? ['graph'] : []), 'health', 'pipeline', ...(hermesInstalled ? ['hermes'] : [])] as const
 
   return (
     <div className="h-[calc(100vh-3.5rem)] flex flex-col overflow-hidden">
@@ -586,7 +621,9 @@ export function MemoryBrowserPanel() {
 
         {/* Main content */}
         <div className="flex-1 min-w-0 flex flex-col bg-[hsl(var(--surface-0))]">
-          {activeView === 'graph' && !isLocal ? (
+          {activeView === 'working' ? (
+            <WorkingMemoryView records={filteredWorkingMemory} tenantName={activeTenant?.display_name || 'Active tenant'} activeProject={activeProject?.name} filters={workingFilters} onFilter={(key, value) => setWorkingFilters((current) => ({ ...current, [key]: value }))} onRefresh={loadWorkingMemory} isLoading={workingLoading} />
+          ) : activeView === 'graph' && !isLocal ? (
             <div className="flex-1 p-4 overflow-hidden flex flex-col"><MemoryGraph /></div>
           ) : activeView === 'health' ? (
             <div className="flex-1 overflow-auto p-6"><HealthView report={healthReport} isLoading={isLoadingHealth} onRefresh={loadHealth} /></div>
