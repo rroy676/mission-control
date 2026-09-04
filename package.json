@@ -22,6 +22,7 @@
     "test:security-audit": "bash scripts/security-audit.test.sh",
     "test:security-shell": "bash scripts/security-audit.test.sh && bash scripts/load-env.test.sh",
     "auth:health": "node scripts/auth-health.mjs",
+    "validate:working-memory:live": "node scripts/validate-working-memory-live.mjs",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:e2e": "pnpm run verify:node && playwright test",

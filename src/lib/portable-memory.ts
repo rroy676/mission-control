@@ -28,9 +28,11 @@ export type PortableMemory = z.infer<typeof portableMemorySchema>
 export function newMemoryId(): string { return `mem_${randomUUID()}` }
 
 const secretPattern = /(api[_ -]?key|password|passwd|session[_ -]?cookie|bearer\s+token|access[_ -]?token|secret|encryption[_ -]?key|private[_ -]?key)\s*[:=]/i
+const bearerValuePattern = /\bbearer\s+[A-Za-z0-9._~+/=-]{12,}\b/i
+const privateKeyMarkerPattern = /-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----/i
 export function rejectSecrets(value: unknown): void {
   const text = JSON.stringify(value)
-  if (secretPattern.test(text) || /\bsk-[A-Za-z0-9_-]{12,}\b/.test(text)) throw new Error('Memory payload contains a secret-like field or value')
+  if (secretPattern.test(text) || bearerValuePattern.test(text) || privateKeyMarkerPattern.test(text) || /\bsk-[A-Za-z0-9_-]{12,}\b/.test(text)) throw new Error('Memory payload contains a secret-like field or value')
 }
 
 export function classifySignificance(input: { memory_type: MemoryType; importance?: PortableMemory['importance']; title?: string; content?: string }): 'transient' | 'retain-working' | 'promotion-candidate' {
