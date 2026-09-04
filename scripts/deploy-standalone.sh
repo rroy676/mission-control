@@ -15,6 +15,28 @@ PID_FILE="${PID_FILE:-$PROJECT_ROOT/.next/standalone/server.pid}"
 SOURCE_DATA_DIR="$PROJECT_ROOT/.data"
 BUILD_DATA_DIR="$PROJECT_ROOT/.next/build-runtime"
 NODE_VERSION_FILE="$PROJECT_ROOT/.nvmrc"
+MANAGED_SERVICE_STOPPED=false
+
+systemctl_user() {
+  DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}" \
+    XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
+    systemctl --user "$@"
+}
+
+stop_managed_service() {
+  if systemctl_user is-active --quiet mission-control.service 2>/dev/null; then
+    echo "==> stopping managed mission-control.service before rebuild"
+    systemctl_user stop mission-control.service
+    MANAGED_SERVICE_STOPPED=true
+  fi
+}
+
+start_managed_service() {
+  if [[ "$MANAGED_SERVICE_STOPPED" == true ]]; then
+    echo "==> starting managed mission-control.service"
+    systemctl_user start mission-control.service
+  fi
+}
 
 use_project_node() {
   if [[ ! -f "$NODE_VERSION_FILE" ]]; then
@@ -187,6 +209,7 @@ load_env
 migrate_runtime_data_dir
 
 echo "==> stopping existing standalone server before rebuild"
+stop_managed_service
 stop_existing_server
 
 echo "==> installing dependencies"
@@ -203,9 +226,14 @@ pnpm build
 echo "==> starting standalone server"
 load_env
 
-PORT="$PORT" HOSTNAME="$LISTEN_HOST" nohup bash "$PROJECT_ROOT/scripts/start-standalone.sh" >"$LOG_PATH" 2>&1 &
-new_pid=$!
-echo "$new_pid" > "$PID_FILE"
+if [[ "$MANAGED_SERVICE_STOPPED" == true ]]; then
+  start_managed_service
+  new_pid=""
+else
+  PORT="$PORT" HOSTNAME="$LISTEN_HOST" nohup bash "$PROJECT_ROOT/scripts/start-standalone.sh" >"$LOG_PATH" 2>&1 &
+  new_pid=$!
+  echo "$new_pid" > "$PID_FILE"
+fi
 
 echo "==> verifying process and static assets"
 for _ in $(seq 1 20); do
@@ -227,7 +255,7 @@ if [[ -z "${listener_pid:-}" ]]; then
   echo "error: no listener detected on port $PORT after startup" >&2
   exit 1
 fi
-if [[ "$listener_pid" != "$new_pid" ]]; then
+if [[ "$MANAGED_SERVICE_STOPPED" != true && "$listener_pid" != "$new_pid" ]]; then
   echo "error: port $PORT is owned by pid=$listener_pid, expected new pid=$new_pid" >&2
   exit 1
 fi
