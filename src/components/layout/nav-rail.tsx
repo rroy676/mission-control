@@ -126,12 +126,6 @@ const gatewayOnlyPanels = new Set([
   'gateways', 'gateway-config', 'channels', 'nodes', 'exec-approvals',
   ...getPluginNavItems().filter(pi => pi.gatewayOnly).map(pi => pi.id),
 ])
-const observabilityOnlyPanels = new Set([
-  'chat', 'channels', 'skills', 'memory', 'logs', 'cost-tracker', 'nodes',
-  'exec-approvals', 'office', 'monitor', 'cron', 'webhooks', 'alerts', 'github',
-  'security', 'users', 'audit', 'gateway-parent', 'gateways', 'gateway-config',
-  'integrations', 'debug', 'settings',
-])
 const adminOnlyPanels = new Set<string>([])
 
 export function NavRail() {
@@ -185,8 +179,7 @@ export function NavRail() {
   // In essential mode, hide non-essential panels.
   const isEssential = interfaceMode === 'essential'
   function filterItems(items: NavItem[]): NavItem[] {
-    return items.filter(i => !observabilityOnlyPanels.has(i.id))
-      .map(i => {
+    return items.map(i => {
         if (i.children) {
           const filteredChildren = filterItems(i.children)
           if (filteredChildren.length === 0) return null

@@ -197,26 +197,24 @@ export function proxy(request: NextRequest) {
     }
   }
 
-  // This deployment is an observability surface, never an execution surface.
-  // Keep the guard here so direct API calls are denied even if a UI control is
-  // accidentally reintroduced. The two observer-ingress exceptions only
-  // update the constrained Hermes presence/heartbeat record.
+  // Compatibility safety profile: keep dangerous execution and host-control
+  // surfaces denied, while allowing the native hub's read-only APIs and
+  // authenticated CRUD panels to remain usable. This is intentionally finer
+  // grained than the former observability-only UI model.
   if (envFlag('MC_OBSERVABILITY_ONLY')) {
-    const observerIngress = pathname === '/api/connect' || /^\/api\/agents\/[^/]+\/heartbeat$/.test(pathname)
     const blockedPath = [
       '/api/local/terminal', '/api/pty', '/api/spawn', '/api/gateways/control',
-      '/api/gateways/connect', '/api/gateway-config', '/api/exec-approvals',
+      '/api/gateways/connect',
       '/api/super', '/api/openclaw/doctor', '/api/openclaw/update',
       '/api/sessions/continue', '/api/agents/message', '/api/agents/optimize',
       '/api/agents/register', '/api/agents/sync', '/api/agents/comms',
       '/api/pipelines/run', '/api/releases/update', '/api/notifications/deliver',
-      '/api/tokens/rotate', '/api/setup', '/api/onboarding', '/api/cleanup',
+      '/api/tokens/rotate', '/api/cleanup',
     ].some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))
-    const mutationApi = pathname.startsWith('/api/projects') || pathname.startsWith('/api/tasks')
-      || pathname.startsWith('/api/github') || pathname.startsWith('/api/memory')
-      || pathname.startsWith('/api/settings') || pathname.startsWith('/api/webhooks')
-      || pathname.startsWith('/api/workflows') || pathname.startsWith('/api/scheduler')
-    if (!observerIngress && (blockedPath || (mutationApi && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)))) {
+    const blockedMutation = [
+      '/api/gateway-config', '/api/exec-approvals', '/api/setup', '/api/onboarding',
+    ].some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))
+    if (blockedPath || (blockedMutation && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method))) {
       return addSecurityHeaders(NextResponse.json({ error: 'Mission Control is observability-only' }, { status: 403 }), request)
     }
   }
