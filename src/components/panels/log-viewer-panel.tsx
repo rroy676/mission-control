@@ -36,6 +36,7 @@ export function LogViewerPanel() {
   const [isAutoScroll, setIsAutoScroll] = useState(true)
   const [availableSources, setAvailableSources] = useState<string[]>([])
   const [isLoading, setIsLoading] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [logFilePath, setLogFilePath] = useState<string | null>(null)
   const logContainerRef = useRef<HTMLDivElement>(null)
   const autoScrollRef = useRef<boolean>(true)
@@ -78,6 +79,7 @@ export function LogViewerPanel() {
 
       log.debug(`Fetching /api/logs?${params}`)
       const data = await apiFetch<{ logs?: LogEntry[] }>(`/api/logs?${params}`)
+      setLoadError(null)
 
       log.debug(`Received ${data.logs?.length || 0} logs from API`)
 
@@ -106,6 +108,7 @@ export function LogViewerPanel() {
       }
     } catch (error) {
       log.error('Failed to load logs:', error)
+      setLoadError(error instanceof Error ? error.message : 'Logs are temporarily unavailable')
     } finally {
       setIsLoading(false)
     }
@@ -350,6 +353,13 @@ export function LogViewerPanel() {
           {t('lastUpdated')}: {logs.length > 0 ? new Date(logs[0]?.timestamp).toLocaleTimeString() : t('never')}
         </div>
       </div>
+
+      {loadError && (
+        <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-300">
+          Logs are temporarily unavailable. Mission Control standalone logs will resume when the local adapter is reachable.
+          <span className="ml-2 text-xs text-yellow-200/70">{loadError}</span>
+        </div>
+      )}
 
       {/* Log Display */}
       <div className="flex-1 bg-card border border-border rounded-lg overflow-hidden">

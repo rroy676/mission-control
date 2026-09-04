@@ -99,8 +99,15 @@ export const config = {
   gatewayHost: process.env.OPENCLAW_GATEWAY_HOST || '127.0.0.1',
   gatewayPort: clampInt(Number(process.env.OPENCLAW_GATEWAY_PORT || '18789'), 1, 65535, 18789),
   logsDir:
+    // Standalone mode owns its log boundary. OpenClaw logs are opt-in so an
+    // absent gateway cannot turn the Logs panel into a dependency on a
+    // runtime-owned path. Existing deployments can explicitly retain the
+    // OpenClaw location with OPENCLAW_LOG_DIR.
+    process.env.MC_LOG_DIR ||
     process.env.OPENCLAW_LOG_DIR ||
-    (openclawStateDir ? path.join(openclawStateDir, 'logs') : ''),
+    (process.env.OPENCLAW_ENABLED === '1' && openclawStateDir
+      ? path.join(openclawStateDir, 'logs')
+      : path.join(resolvedDataDir, 'logs')),
   tempLogsDir: process.env.CLAWDBOT_TMP_LOG_DIR || '',
   memoryDir: defaultMemoryDir,
   memoryAllowedPrefixes:
