@@ -24,7 +24,7 @@ interface TenantRow {
   role: TenantMembershipRole
 }
 
-function auditTenantDecision(
+export function recordTenantAuthorizationDecision(
   db: Database.Database,
   user: User,
   requestedTenantKey: string | null,
@@ -84,10 +84,10 @@ export function resolveTenantContext(user: User, requestedTenantKey?: string | n
     ? membershipForKey(db, user.id, requested)
     : membershipForId(db, user.id, user.tenant_id)
   if (!row) {
-    auditTenantDecision(db, user, requested, null, 'tenant_context', 'deny', requested ? 'tenant_not_authorized' : 'active_tenant_missing')
+    recordTenantAuthorizationDecision(db, user, requested, null, 'tenant_context', 'deny', requested ? 'tenant_not_authorized' : 'active_tenant_missing')
     return null
   }
-  auditTenantDecision(db, user, requested, row.tenant_key, 'tenant_context', 'allow', requested ? 'membership_verified' : 'active_session_tenant')
+  recordTenantAuthorizationDecision(db, user, requested, row.tenant_key, 'tenant_context', 'allow', requested ? 'membership_verified' : 'active_session_tenant')
   return { id: row.id, tenantKey: row.tenant_key, slug: row.slug, displayName: row.display_name, status: row.status, membershipRole: row.role, userId: user.id }
 }
 
@@ -107,4 +107,3 @@ export function selectTenantForSession(user: User, tenantKey: string): TenantCon
   db.prepare(`UPDATE user_sessions SET tenant_id = ?, workspace_id = ? WHERE id = ? AND user_id = ?`).run(context.id, workspace.id, user.sessionId, user.id)
   return context
 }
-

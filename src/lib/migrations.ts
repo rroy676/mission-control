@@ -1616,6 +1616,102 @@ const migrations: Migration[] = [
       `)
     }
   }
+  ,{
+    id: '057_model_provider_profiles',
+    up(db: Database.Database) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS model_provider_catalog (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          provider_id TEXT NOT NULL,
+          model_id TEXT NOT NULL,
+          display_name TEXT NOT NULL,
+          enabled_globally INTEGER NOT NULL DEFAULT 1,
+          context_window INTEGER,
+          capabilities TEXT NOT NULL DEFAULT '{}',
+          pricing_metadata TEXT NOT NULL DEFAULT '{}',
+          promotional_free INTEGER NOT NULL DEFAULT 0,
+          promotional_expires_at INTEGER,
+          deprecated INTEGER NOT NULL DEFAULT 0,
+          metadata_updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          UNIQUE(provider_id, model_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_model_catalog_enabled ON model_provider_catalog(enabled_globally, deprecated);
+        CREATE TABLE IF NOT EXISTS tenant_credentials (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id INTEGER NOT NULL,
+          credential_ref TEXT NOT NULL,
+          provider_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'unconfigured',
+          metadata TEXT NOT NULL DEFAULT '{}',
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          UNIQUE(tenant_id, credential_ref),
+          FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_tenant_credentials_tenant ON tenant_credentials(tenant_id);
+        CREATE TABLE IF NOT EXISTS tenant_model_profiles (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id INTEGER NOT NULL,
+          provider_id TEXT NOT NULL,
+          model_id TEXT NOT NULL,
+          purpose TEXT NOT NULL,
+          scope TEXT NOT NULL CHECK (scope IN ('tenant-default', 'agent-override', 'workflow-override', 'task-override')),
+          agent_id INTEGER,
+          workflow_id INTEGER,
+          task_id INTEGER,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          priority INTEGER NOT NULL DEFAULT 100,
+          credential_ref TEXT,
+          fallback_profile_id INTEGER,
+          promotional_free INTEGER NOT NULL DEFAULT 0,
+          promotional_expires_at INTEGER,
+          effective_from INTEGER NOT NULL DEFAULT (unixepoch()),
+          expires_at INTEGER,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+          FOREIGN KEY (fallback_profile_id) REFERENCES tenant_model_profiles(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_model_profiles_scope ON tenant_model_profiles(tenant_id, scope, purpose, enabled, priority);
+        CREATE INDEX IF NOT EXISTS idx_model_profiles_agent ON tenant_model_profiles(tenant_id, agent_id);
+        CREATE INDEX IF NOT EXISTS idx_model_profiles_fallback ON tenant_model_profiles(tenant_id, fallback_profile_id);
+        CREATE TABLE IF NOT EXISTS tenant_model_usage (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id INTEGER NOT NULL,
+          project_id INTEGER,
+          agent_id INTEGER,
+          workflow_id INTEGER,
+          task_id INTEGER,
+          profile_id INTEGER,
+          provider_id TEXT NOT NULL,
+          model_id TEXT NOT NULL,
+          input_tokens INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0,
+          total_tokens INTEGER NOT NULL DEFAULT 0,
+          estimated_cost REAL,
+          actual_cost REAL,
+          currency TEXT NOT NULL DEFAULT 'USD',
+          occurred_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+          FOREIGN KEY (profile_id) REFERENCES tenant_model_profiles(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_tenant_model_usage_tenant_time ON tenant_model_usage(tenant_id, occurred_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_tenant_model_usage_profile ON tenant_model_usage(tenant_id, profile_id);
+      `)
+      // Manual, known catalog entries only. No provider secrets or discovery.
+      const catalog = [
+        ['anthropic', 'claude-sonnet-4-6', 'Claude Sonnet 4.6', 200000, 0],
+        ['openai', 'gpt-4.1-mini', 'GPT-4.1 Mini', 1047576, 0],
+        ['openrouter', 'openai/gpt-4.1-mini', 'OpenRouter / GPT-4.1 Mini', 1047576, 0],
+      ] as const
+      const insert = db.prepare(`
+        INSERT OR IGNORE INTO model_provider_catalog
+          (provider_id, model_id, display_name, context_window, promotional_free)
+        VALUES (?, ?, ?, ?, ?)
+      `)
+      for (const row of catalog) insert.run(...row)
+    }
+  }
 ]
 
 export function runMigrations(db: Database.Database) {
