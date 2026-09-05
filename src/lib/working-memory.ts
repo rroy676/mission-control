@@ -12,8 +12,9 @@ export type MemoryQuery = Partial<Pick<PortableMemory, 'project_id'|'agent_id'|'
 function json(v: unknown) { return JSON.stringify(v ?? {}) }
 function parseRow(row: any): PortableMemory & Record<string, unknown> {
   const base = portableMemorySchema.parse({ memory_id: row.memory_id, schema_version: row.schema_version, tenant_id: row.tenant_key, project_id: row.project_key, agent_id: row.agent_key, task_id: row.task_key, memory_type: row.memory_type, scope: row.scope, title: row.title, content: row.content, source: row.source, importance: row.importance, lifecycle_status: row.lifecycle_status, promotion_status: row.promotion_status, durable_reference: row.durable_reference, created_at: row.created_at, updated_at: row.updated_at, expires_at: row.expires_at, metadata: JSON.parse(row.metadata || '{}') })
-  if (row.memory_type !== 'handoff') return base
-  return { ...base, source_agent: row.source_agent, destination_agent: row.destination_agent, objective: row.objective, relevant_context: row.relevant_context, constraints: row.constraints, source_references: JSON.parse(row.source_references || '[]'), expected_result: row.expected_result, status: row.handoff_status, completed_at: row.completed_at }
+  const linkage = { promotion_state: row.promotion_state || row.promotion_status || 'none', durable_id: row.durable_id || null, durable_path: row.durable_path || null, durable_commit_sha: row.durable_commit_sha || null, promoted_at: row.promoted_at || null, promoted_by: row.promoted_by || null, promotion_type: row.promotion_type || null }
+  if (row.memory_type !== 'handoff') return { ...base, ...linkage }
+  return { ...base, ...linkage, source_agent: row.source_agent, destination_agent: row.destination_agent, objective: row.objective, relevant_context: row.relevant_context, constraints: row.constraints, source_references: JSON.parse(row.source_references || '[]'), expected_result: row.expected_result, status: row.handoff_status, completed_at: row.completed_at }
 }
 
 function verifyRef(db: Database.Database, tenant: TenantContext, kind: 'project'|'agent'|'task', id: string | null | undefined): number | null {

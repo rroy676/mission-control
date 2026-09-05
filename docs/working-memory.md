@@ -41,3 +41,34 @@ Ordinary reads do not flood Activity. Secret-like fields and values are rejected
 raw credentials are never stored. The pre-existing OpenClaw file browser remains
 available for native memory infrastructure, but it is not used as this portable
 tenant record store.
+
+## Durable promotion and tenant export
+
+Promotion is explicit and bounded. Owner/admin users may promote eligible
+incident, lesson, current-state, product-state, decision, governance,
+architecture, acceptance, Finance, or Growth material through
+`POST /api/memory/working/:id/promotion`. Candidate status is only a review
+signal; it does not write the archive. CEO decision promotion requires the
+tenant owner. Viewers cannot promote or reject, and operators cannot promote.
+
+The server resolves tenant membership and the active session tenant before
+loading the memory. A foreign memory, project, agent, model profile, or
+tenant key is denied. Promotion writes a versioned Markdown note below the
+existing `Software-Studio` archive, in a policy-derived tenant namespace,
+then stages only that note and commits only that path. The durable linkage
+(`durable_id`, path, promotion type, actor, timestamp, and commit SHA) is
+stored back on the working-memory record and in tenant-scoped audit history.
+Repeated promotion is idempotent. Changed content requires a future explicit
+supersession operation; institutional history is not silently overwritten.
+
+Promotion Markdown uses `durable-memory-1.0` front matter and excludes
+passwords, tokens, cookies, API keys, private keys, and runtime secret blobs.
+
+`POST /api/tenant-export` creates a local protected `.tar.gz` bundle for the
+effective tenant. The bundle contains `manifest.json`, deterministic JSON or
+JSONL payload files, tenant-filtered promoted Markdown under
+`durable-memory/`, and SHA-256 `checksums.txt`. Exports are not encrypted or
+uploaded in this slice. Admin users create/download exports; viewers may
+inspect status. The validator checks archive traversal, root structure,
+manifest, checksums, and secret policy before a completed export is returned.
+No restore or cloud-backup provider is implemented.

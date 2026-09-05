@@ -1761,6 +1761,33 @@ const migrations: Migration[] = [
       db.exec('CREATE INDEX IF NOT EXISTS idx_audit_log_tenant_created ON audit_log(tenant_id, created_at DESC)')
       db.exec('CREATE INDEX IF NOT EXISTS idx_activities_tenant_created ON activities(tenant_id, created_at DESC)')
     }
+  },
+  {
+    id: '059_durable_memory_promotion',
+    up(db) {
+      const cols = db.prepare('PRAGMA table_info(working_memory)').all() as Array<{ name: string }>
+      const additions: Array<[string, string]> = [
+        ['promotion_state', "TEXT NOT NULL DEFAULT 'none'"],
+        ['durable_id', 'TEXT'], ['durable_path', 'TEXT'], ['durable_commit_sha', 'TEXT'],
+        ['promoted_at', 'INTEGER'], ['promoted_by', 'TEXT'], ['promotion_type', 'TEXT'],
+      ]
+      for (const [name, definition] of additions) if (!cols.some((c) => c.name === name)) db.exec(`ALTER TABLE working_memory ADD COLUMN ${name} ${definition}`)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS durable_promotions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id INTEGER NOT NULL, memory_id TEXT NOT NULL, durable_id TEXT NOT NULL,
+          durable_path TEXT NOT NULL, promotion_type TEXT NOT NULL, state TEXT NOT NULL
+            CHECK (state IN ('promoted','rejected','superseded')),
+          source_hash TEXT NOT NULL, supersedes TEXT, superseded_by TEXT,
+          actor TEXT NOT NULL, actor_id INTEGER, commit_sha TEXT, reason TEXT,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+          UNIQUE(tenant_id, memory_id, state)
+        );
+        CREATE INDEX IF NOT EXISTS idx_durable_promotions_tenant ON durable_promotions(tenant_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_durable_promotions_memory ON durable_promotions(tenant_id, memory_id);
+      `)
+    }
   }
 ]
 

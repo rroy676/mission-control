@@ -88,6 +88,9 @@ export const config = {
     process.env.MC_CLAUDE_HOME ||
     path.join(os.homedir(), '.claude'),
   dataDir: resolvedDataDir,
+  durableArchiveRoot: process.env.MC_DURABLE_ARCHIVE_ROOT || path.resolve(process.cwd(), '..', 'autonomous-company', 'Software-Studio'),
+  durableRepoRoot: process.env.MC_DURABLE_REPO_ROOT || path.resolve(process.cwd(), '..', 'autonomous-company'),
+  exportDir: process.env.MC_EXPORT_DIR || path.join(resolvedDataDir, 'exports'),
   dbPath: resolvedDbPath,
   tokensPath: resolvedTokensPath,
   // Keep openclawHome as a legacy alias for existing code paths.

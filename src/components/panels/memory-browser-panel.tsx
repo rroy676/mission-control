@@ -58,7 +58,7 @@ interface ProcessingResult {
 }
 
 interface WorkingMemoryRecord {
-  memory_id: string; project_id?: string | null; agent_id?: string | null; memory_type: string; scope: string; title: string; content: string; source: string; importance: string; lifecycle_status: string; promotion_status: string; created_at: number; updated_at: number; source_agent?: string; destination_agent?: string; objective?: string; expected_result?: string; status?: string
+  memory_id: string; project_id?: string | null; agent_id?: string | null; memory_type: string; scope: string; title: string; content: string; source: string; importance: string; lifecycle_status: string; promotion_status: string; promotion_state?: string; durable_id?: string | null; durable_path?: string | null; durable_commit_sha?: string | null; created_at: number; updated_at: number; source_agent?: string; destination_agent?: string; objective?: string; expected_result?: string; status?: string
 }
 
 function formatFileSize(bytes: number): string {
@@ -102,12 +102,12 @@ function statusBg(status: 'healthy' | 'warning' | 'critical'): string {
   return 'bg-red-500'
 }
 
-function WorkingMemoryView({ records, tenantName, activeProject, filters, onFilter, onRefresh, isLoading }: { records: WorkingMemoryRecord[]; tenantName: string; activeProject?: string; filters: { type: string; lifecycle: string; promotion: string; project: string }; onFilter: (key: string, value: string) => void; onRefresh: () => void; isLoading: boolean }) {
+function WorkingMemoryView({ records, tenantName, activeProject, filters, onFilter, onRefresh, isLoading, canPromote, onPromote }: { records: WorkingMemoryRecord[]; tenantName: string; activeProject?: string; filters: { type: string; lifecycle: string; promotion: string; project: string }; onFilter: (key: string, value: string) => void; onRefresh: () => void; isLoading: boolean; canPromote: boolean; onPromote: (memoryId: string) => void }) {
   const select = (key: string, value: string, children: string[]) => <select value={value} onChange={(event) => onFilter(key, event.target.value)} className="px-2 py-1 text-xs font-mono bg-[hsl(var(--surface-1))] border border-border/50 rounded text-foreground"><option value="">{key}</option>{children.map((item) => <option key={item} value={item}>{item.replaceAll('_', ' ')}</option>)}</select>
   return <div className="flex-1 overflow-auto p-4 md:p-6">
     <div className="flex flex-wrap items-center gap-2 mb-4"><div className="mr-auto"><div className="text-xs text-muted-foreground/60 font-mono">STRUCTURED WORKING MEMORY</div><div className="text-lg font-medium text-foreground">{tenantName}</div>{activeProject && <div className="text-xs text-muted-foreground">Project context: {activeProject}</div>}</div><button onClick={onRefresh} className="px-2 py-1 text-xs font-mono text-muted-foreground hover:text-foreground rounded hover:bg-[hsl(var(--surface-2))]">Refresh</button></div>
     <div className="flex flex-wrap gap-2 mb-4">{select('type', filters.type, ['current_state','handoff','task_outcome','recent_decision','incident_context','product_context','operational_note','blocker','lesson_candidate','promotion_candidate'])}{select('lifecycle', filters.lifecycle, ['active','superseded','resolved','expired','archived'])}{select('promotion', filters.promotion, ['none','promotion-candidate','promoted'])}<input value={filters.project} onChange={(event) => onFilter('project', event.target.value)} placeholder="project id" className="w-28 px-2 py-1 text-xs font-mono bg-[hsl(var(--surface-1))] border border-border/50 rounded text-foreground" /></div>
-    {isLoading ? <div className="py-12 text-center text-xs font-mono text-muted-foreground">Loading working memory…</div> : records.length === 0 ? <div className="py-12 text-center text-xs font-mono text-muted-foreground/60">No structured memory matches these filters.</div> : <div className="space-y-2">{records.map((item) => <article key={item.memory_id} className={`p-3 rounded border ${item.memory_type === 'current_state' && item.lifecycle_status === 'active' ? 'border-primary/50 bg-primary/5' : 'border-border/50 bg-[hsl(var(--surface-1))]'}`}><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-medium text-foreground">{item.title}</span>{item.memory_type === 'current_state' && item.lifecycle_status === 'active' && <span className="text-[10px] uppercase font-mono text-primary">CURRENT</span>}<span className="ml-auto text-[10px] font-mono text-muted-foreground">{item.memory_type} · {item.scope}</span></div>{item.memory_type === 'handoff' && <div className="mt-1 text-xs font-mono text-primary/80">{item.source_agent} → {item.destination_agent} · {item.status || 'pending'}</div>}<p className="mt-2 text-sm text-foreground/70 whitespace-pre-wrap line-clamp-3">{item.objective || item.content}</p><div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-mono text-muted-foreground/60"><span>{item.lifecycle_status}</span><span>{item.promotion_status}</span><span>importance: {item.importance}</span><span>updated {new Date(item.updated_at * 1000).toLocaleString()}</span>{item.project_id && <span>project: {item.project_id}</span>}</div></article>)}</div>}
+    {isLoading ? <div className="py-12 text-center text-xs font-mono text-muted-foreground">Loading working memory…</div> : records.length === 0 ? <div className="py-12 text-center text-xs font-mono text-muted-foreground/60">No structured memory matches these filters.</div> : <div className="space-y-2">{records.map((item) => <article key={item.memory_id} className={`p-3 rounded border ${item.memory_type === 'current_state' && item.lifecycle_status === 'active' ? 'border-primary/50 bg-primary/5' : 'border-border/50 bg-[hsl(var(--surface-1))]'}`}><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-medium text-foreground">{item.title}</span>{item.memory_type === 'current_state' && item.lifecycle_status === 'active' && <span className="text-[10px] uppercase font-mono text-primary">CURRENT</span>}<span className="ml-auto text-[10px] font-mono text-muted-foreground">{item.memory_type} · {item.scope}</span></div>{item.memory_type === 'handoff' && <div className="mt-1 text-xs font-mono text-primary/80">{item.source_agent} → {item.destination_agent} · {item.status || 'pending'}</div>}<p className="mt-2 text-sm text-foreground/70 whitespace-pre-wrap line-clamp-3">{item.objective || item.content}</p><div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-mono text-muted-foreground/60"><span>{item.lifecycle_status}</span><span>{item.promotion_state || item.promotion_status}</span><span>importance: {item.importance}</span><span>updated {new Date(item.updated_at * 1000).toLocaleString()}</span>{item.project_id && <span>project: {item.project_id}</span>}{item.durable_id && <span className="text-green-400">durable: {item.durable_id} · {item.durable_path}</span>}</div>{canPromote && item.promotion_state !== 'promoted' && (item.promotion_status === 'promotion-candidate' || item.memory_type === 'current_state' || item.memory_type === 'incident_context' || item.memory_type === 'lesson_candidate') && <button onClick={() => onPromote(item.memory_id)} className="mt-2 px-2 py-1 text-[10px] font-mono rounded border border-primary/40 text-primary hover:bg-primary/10">Promote as operational record</button>}</article>)}</div>}
   </div>
 }
 
@@ -124,7 +124,7 @@ export function MemoryBrowserPanel() {
     setSelectedMemoryFile,
     setMemoryContent,
     setMemoryFileLinks,
-    setMemoryHealth, activeTenant, activeProject
+    setMemoryHealth, activeTenant, activeProject, currentUser
   } = useMissionControl()
   const isLocal = dashboardMode === 'local'
 
@@ -205,6 +205,11 @@ export function MemoryBrowserPanel() {
       setWorkingMemory(data.memories || [])
     } catch (error) { log.error('Failed to load structured working memory:', error) } finally { setWorkingLoading(false) }
   }, [activeTenant?.tenantKey])
+  const promoteWorkingMemory = useCallback(async (memoryId: string) => {
+    const tenant = activeTenant?.tenantKey ? `?tenant_key=${encodeURIComponent(activeTenant.tenantKey)}` : ''
+    await apiFetch(`/api/memory/working/${encodeURIComponent(memoryId)}/promotion${tenant}`, { method: 'POST', body: JSON.stringify({ action: 'promote', promotion_type: 'operational_acceptance' }), headers: { 'content-type': 'application/json' } })
+    await loadWorkingMemory()
+  }, [activeTenant?.tenantKey, loadWorkingMemory])
 
   useEffect(() => { if (activeView === 'working') void loadWorkingMemory() }, [activeView, loadWorkingMemory])
 
@@ -622,7 +627,7 @@ export function MemoryBrowserPanel() {
         {/* Main content */}
         <div className="flex-1 min-w-0 flex flex-col bg-[hsl(var(--surface-0))]">
           {activeView === 'working' ? (
-            <WorkingMemoryView records={filteredWorkingMemory} tenantName={activeTenant?.displayName || 'Active tenant'} activeProject={activeProject?.name} filters={workingFilters} onFilter={(key, value) => setWorkingFilters((current) => ({ ...current, [key]: value }))} onRefresh={loadWorkingMemory} isLoading={workingLoading} />
+            <WorkingMemoryView records={filteredWorkingMemory} tenantName={activeTenant?.displayName || 'Active tenant'} activeProject={activeProject?.name} filters={workingFilters} onFilter={(key, value) => setWorkingFilters((current) => ({ ...current, [key]: value }))} onRefresh={loadWorkingMemory} isLoading={workingLoading} canPromote={currentUser?.role === 'admin'} onPromote={promoteWorkingMemory} />
           ) : activeView === 'graph' && !isLocal ? (
             <div className="flex-1 p-4 overflow-hidden flex flex-col"><MemoryGraph /></div>
           ) : activeView === 'health' ? (
