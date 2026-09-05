@@ -841,7 +841,7 @@ function ContextSwitcher({ currentUser, isAdmin, isLocal, isConnected, tenants, 
 
   const userName = currentUser?.display_name || currentUser?.username || 'User'
   const initials = userName.split(/\s+/).map(w => w[0]).join('').toUpperCase().slice(0, 2)
-  const tenantName = activeTenant?.display_name || defaultOrgName
+  const tenantName = activeTenant?.displayName || defaultOrgName
   const projectName = activeProject?.name
   const contextLine = projectName ? `${tenantName} / ${projectName}` : tenantName
   const connectionLabel = isLocal ? tcs('localMode') : isConnected ? tcs('connected') : tcs('disconnected')
@@ -1050,8 +1050,8 @@ function ContextSwitcher({ currentUser, isAdmin, isLocal, isConnected, tenants, 
                   {tenants.map((tenant) => (
                     <OrgRow
                       key={tenant.id}
-                      label={tenant.display_name}
-                      initial={tenant.display_name?.[0]?.toUpperCase() || 'T'}
+                      label={tenant.displayName}
+                      initial={tenant.displayName?.[0]?.toUpperCase() || 'T'}
                       active={activeTenant?.id === tenant.id}
                       colorClass={tenant.status === 'active' ? 'bg-green-500/20 text-green-400' : tenant.status === 'error' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'}
                       onClick={() => { onSwitchTenant(tenant); setOpen(false) }}

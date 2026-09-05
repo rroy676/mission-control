@@ -200,11 +200,11 @@ export function MemoryBrowserPanel() {
     setWorkingLoading(true)
     try {
       const params = new URLSearchParams({ limit: '100' })
-      if (activeTenant?.tenant_key) params.set('tenant_key', activeTenant.tenant_key)
+      if (activeTenant?.tenantKey) params.set('tenant_key', activeTenant.tenantKey)
       const data = await apiFetch<{ memories?: WorkingMemoryRecord[] }>(`/api/memory/working?${params}`)
       setWorkingMemory(data.memories || [])
     } catch (error) { log.error('Failed to load structured working memory:', error) } finally { setWorkingLoading(false) }
-  }, [activeTenant?.tenant_key])
+  }, [activeTenant?.tenantKey])
 
   useEffect(() => { if (activeView === 'working') void loadWorkingMemory() }, [activeView, loadWorkingMemory])
 
@@ -622,7 +622,7 @@ export function MemoryBrowserPanel() {
         {/* Main content */}
         <div className="flex-1 min-w-0 flex flex-col bg-[hsl(var(--surface-0))]">
           {activeView === 'working' ? (
-            <WorkingMemoryView records={filteredWorkingMemory} tenantName={activeTenant?.display_name || 'Active tenant'} activeProject={activeProject?.name} filters={workingFilters} onFilter={(key, value) => setWorkingFilters((current) => ({ ...current, [key]: value }))} onRefresh={loadWorkingMemory} isLoading={workingLoading} />
+            <WorkingMemoryView records={filteredWorkingMemory} tenantName={activeTenant?.displayName || 'Active tenant'} activeProject={activeProject?.name} filters={workingFilters} onFilter={(key, value) => setWorkingFilters((current) => ({ ...current, [key]: value }))} onRefresh={loadWorkingMemory} isLoading={workingLoading} />
           ) : activeView === 'graph' && !isLocal ? (
             <div className="flex-1 p-4 overflow-hidden flex flex-col"><MemoryGraph /></div>
           ) : activeView === 'health' ? (

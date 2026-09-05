@@ -6,11 +6,15 @@ import crypto from 'node:crypto'
 import Database from 'better-sqlite3'
 if (process.argv[2] !== '--from-env') { console.error('Usage: MC_ADMIN_PASSWORD=<new password> node scripts/reset-local-admin.mjs --from-env'); process.exit(2) }
 const root = path.resolve(new URL('.', import.meta.url).pathname, '..')
-function dotenvValue(name) {
-  try { const line = fs.readFileSync(path.join(root, '.env'), 'utf8').split(/\r?\n/).find((item) => item.startsWith(`${name}=`)); if (!line) return ''; let value = line.slice(name.length + 1).trim(); if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1); return value } catch { return '' }
+function dotenvValues() {
+  const values = {}
+  try { for (const line of fs.readFileSync(path.join(root, '.env'), 'utf8').split(/\r?\n/)) { const trimmed = line.trim(); const i = trimmed.indexOf('='); if (i < 1 || trimmed.startsWith('#')) continue; const key = trimmed.slice(0, i).trim(); let value = trimmed.slice(i + 1).trim(); if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1); else value = value.replace(/\s+#.*$/, '').trim(); values[key] = value } } catch {}
+  return values
 }
-let password = process.env.MC_ADMIN_PASSWORD || dotenvValue('AUTH_PASS')
-if (!password && dotenvValue('AUTH_PASS_B64')) password = Buffer.from(dotenvValue('AUTH_PASS_B64'), 'base64').toString('utf8')
+const env = dotenvValues()
+let password = process.env.MC_ADMIN_PASSWORD
+if (!password && env.AUTH_PASS_B64) password = Buffer.from(env.AUTH_PASS_B64, 'base64').toString('utf8')
+if (!password) password = env.AUTH_PASS || ''
 if (!password || password.length < 8) { console.error('MC_ADMIN_PASSWORD must be set and at least 8 characters; value is never printed'); process.exit(2) }
 const dataDir = process.env.MISSION_CONTROL_DATA_DIR || path.join(root, '.data')
 const dbPath = process.env.MISSION_CONTROL_DB_PATH || path.join(dataDir, 'mission-control.db')

@@ -44,4 +44,17 @@ export MISSION_CONTROL_DATA_DIR="${MISSION_CONTROL_DATA_DIR:-$PROJECT_ROOT/.data
 # Next.js standalone server reads HOSTNAME to decide bind address.
 # Default to 0.0.0.0 so the server is accessible from outside the host.
 export HOSTNAME="${HOSTNAME:-0.0.0.0}"
-exec node server.js
+NODE_BIN="${MC_NODE_BIN:-node}"
+if [[ ! -x "$NODE_BIN" ]] && ! command -v "$NODE_BIN" >/dev/null 2>&1; then
+  echo "error: configured Node binary is unavailable: $NODE_BIN" >&2
+  exit 1
+fi
+if [[ -f "$PROJECT_ROOT/.nvmrc" ]]; then
+  expected_major="$(tr -d '[:space:]v' < "$PROJECT_ROOT/.nvmrc" | cut -d. -f1)"
+  actual_major="$($NODE_BIN -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
+  if [[ -n "$expected_major" && "$actual_major" != "$expected_major" ]]; then
+    echo "error: Node $actual_major does not match project Node major $expected_major; set MC_NODE_BIN" >&2
+    exit 1
+  fi
+fi
+exec "$NODE_BIN" server.js

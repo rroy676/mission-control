@@ -6,7 +6,7 @@ describe('Context inventory client security contract', () => {
   it('routes tenant, OS-user, and project inventory through the shared client', () => {
     const source = readFileSync(join(process.cwd(), 'src/store/index.ts'), 'utf8')
 
-    expect(source).toContain("apiFetch<{ tenants?: Tenant[] }>('/api/super/tenants'")
+    expect(source).toContain("apiFetch<{ tenants?: Tenant[]; active_tenant?: Tenant | null }>('/api/tenants'")
     expect(source).toContain("apiFetch<{ users?: OsUser[] }>('/api/super/os-users'")
     expect(source).toContain("apiFetch<{ projects?: Project[] }>('/api/projects'")
     expect(source).not.toMatch(

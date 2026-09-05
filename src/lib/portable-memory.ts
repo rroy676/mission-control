@@ -27,7 +27,7 @@ export type PortableMemory = z.infer<typeof portableMemorySchema>
 
 export function newMemoryId(): string { return `mem_${randomUUID()}` }
 
-const secretPattern = /(api[_ -]?key|password|passwd|session[_ -]?cookie|bearer\s+token|access[_ -]?token|secret|encryption[_ -]?key|private[_ -]?key)\s*[:=]/i
+const secretPattern = /(api[_ -]?key|password|passwd|session[_ -]?cookie|bearer\s+token|access[_ -]?token|secret|encryption[_ -]?key|private[_ -]?key)\s*["']?\s*[:=]/i
 const bearerValuePattern = /\bbearer\s+[A-Za-z0-9._~+/=-]{12,}\b/i
 const privateKeyMarkerPattern = /-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----/i
 export function rejectSecrets(value: unknown): void {

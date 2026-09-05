@@ -37,7 +37,7 @@ export function ModelProfilesPanel() {
     }
   }, [providerModel])
 
-  useEffect(() => { void load() }, [load, activeTenant?.tenant_key])
+  useEffect(() => { void load() }, [load, activeTenant?.tenantKey])
 
   async function save() {
     const [provider, ...modelParts] = providerModel.split('/')
@@ -55,7 +55,7 @@ export function ModelProfilesPanel() {
     <div className="p-6 space-y-5">
       <div>
         <h1 className="text-2xl font-semibold">Model Profiles</h1>
-        <p className="text-sm text-muted-foreground mt-1">Tenant-scoped configuration for {activeTenant?.display_name || 'the active tenant'}. No provider secrets are stored here.</p>
+        <p className="text-sm text-muted-foreground mt-1">Tenant-scoped configuration for {activeTenant?.displayName || 'the active tenant'}. No provider secrets are stored here.</p>
       </div>
       <section className="rounded-lg border border-border bg-card p-4 space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

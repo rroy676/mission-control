@@ -311,11 +311,11 @@ export interface CurrentUser {
 // Billing/provisioning entity that can own multiple Mission Control workspaces.
 export interface Tenant {
   id: number
-  tenant_key?: string
+  tenantKey: string
   slug: string
-  display_name: string
+  displayName: string
   status: string
-  linux_user: string
+  linux_user?: string
   gateway_port?: number | null
   owner_gateway?: string
   membershipRole?: 'owner' | 'admin' | 'operator' | 'viewer'
@@ -836,10 +836,10 @@ export const useMissionControl = create<MissionControlStore>()(
     setActiveTenant: (tenant) => {
       // The server is authoritative. Local storage is retained only as a
       // display cache and is never sufficient to grant tenant access.
-      if (tenant?.tenant_key) {
+      if (tenant?.tenantKey) {
         void apiFetch('/api/tenants', {
           method: 'POST',
-          body: JSON.stringify({ tenant_key: tenant.tenant_key }),
+          body: JSON.stringify({ tenant_key: tenant.tenantKey }),
         }).catch(() => undefined)
       }
       try {

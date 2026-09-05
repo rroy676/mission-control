@@ -57,7 +57,7 @@ export interface HandoffInput {
 export function createHandoff(user: User, input: HandoffInput, requestedTenantKey?: string | null) {
   const context = activeContext(user, requestedTenantKey)
   const db = getDatabase(); rejectSecrets(input)
-  const agent = (name: string) => db.prepare('SELECT id FROM agents a JOIN workspaces w ON w.id=a.workspace_id WHERE a.name=? AND w.tenant_id=?').get(name, context.id) as {id:number}|undefined
+  const agent = (name: string) => db.prepare('SELECT a.id FROM agents a JOIN workspaces w ON w.id=a.workspace_id WHERE a.name=? AND w.tenant_id=?').get(name, context.id) as {id:number}|undefined
   const source = agent(input.source_agent), destination = agent(input.destination_agent)
   if (!source || !destination) throw new Error('Handoff agents must belong to active tenant')
   const refs = input.source_references || []; if (refs.length > 20 || refs.some((v) => typeof v !== 'string' || v.length > 500)) throw new Error('Invalid handoff source references')

@@ -8,7 +8,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 BRANCH="${BRANCH:-$(git -C "$PROJECT_ROOT" branch --show-current)}"
 PORT="${PORT:-3000}"
-LISTEN_HOST="${MC_HOSTNAME:-0.0.0.0}"
+LISTEN_HOST="${MC_HOSTNAME:-${HOSTNAME:-0.0.0.0}}"
 LOG_PATH="${LOG_PATH:-/tmp/mc.log}"
 VERIFY_HOST="${VERIFY_HOST:-$LISTEN_HOST}"
 PID_FILE="${PID_FILE:-$PROJECT_ROOT/.next/standalone/server.pid}"

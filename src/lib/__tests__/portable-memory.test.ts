@@ -13,6 +13,10 @@ describe('portable working-memory contract', () => {
     expect(portableMemorySchema.safeParse({ ...record, rowid: 4 }).success).toBe(false)
     expect(portableMemorySchema.safeParse({ ...record, metadata: Object.fromEntries(Array.from({ length: 41 }, (_, i) => [`k${i}`, true])) }).success).toBe(false)
   })
+
+  it('rejects secret-like metadata keys after JSON serialization', () => {
+    expect(() => rejectSecrets({ metadata: { password: 'fixture' } })).toThrow()
+  })
   it('classifies explicit material context for promotion review only', () => {
     expect(classifySignificance({ memory_type:'operational_note', importance:'low' })).toBe('transient')
     expect(classifySignificance({ memory_type:'recent_decision', importance:'normal' })).toBe('promotion-candidate')

@@ -309,7 +309,7 @@ export function HeaderBar() {
               className="hidden lg:flex items-center gap-1 text-2xs bg-secondary/50 min-w-0 max-w-[320px]"
               title={`Scoped to project: ${activeProject.name}`}
             >
-              <span className="text-muted-foreground/60 truncate">{activeTenant?.display_name || 'Default'}</span>
+              <span className="text-muted-foreground/60 truncate">{activeTenant?.displayName || 'Default'}</span>
               <span className="text-muted-foreground/40">/</span>
               <span className="font-medium text-foreground truncate">{activeProject.name}</span>
             </Button>
@@ -317,7 +317,7 @@ export function HeaderBar() {
             <div className="hidden lg:flex items-center gap-1 px-2 py-1 rounded-md bg-secondary/40 text-2xs">
               <span className="text-muted-foreground">{th('workspace')}</span>
               <span className="text-muted-foreground/40">/</span>
-              <span className="font-medium text-foreground truncate max-w-[220px]">{activeTenant.display_name}</span>
+              <span className="font-medium text-foreground truncate max-w-[220px]">{activeTenant.displayName}</span>
             </div>
           ) : null}
 
