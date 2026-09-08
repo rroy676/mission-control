@@ -1,27 +1,9 @@
-'use client'
-
-import { ApiReferenceReact } from '@scalar/api-reference-react'
-import '@scalar/api-reference-react/style.css'
+import { ApiReference } from '@/components/docs/api-reference'
 
 export default function DocsPage() {
   return (
     <div className="h-screen">
-      <ApiReferenceReact
-        configuration={{
-          url: '/api/docs',
-          theme: 'kepler',
-          darkMode: true,
-          hideModels: false,
-          hideDownloadButton: false,
-          defaultHttpClient: {
-            targetKey: 'shell',
-            clientKey: 'curl',
-          },
-          metaData: {
-            title: 'Mission Control API Docs',
-          },
-        }}
-      />
+      <ApiReference />
     </div>
   )
 }
