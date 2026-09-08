@@ -1843,6 +1843,36 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_tenant_backups_tenant_status ON tenant_backups(tenant_id, restore_verification_status);
       `)
     }
+  },
+  {
+    id: '061_backup_provider_profiles',
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS tenant_backup_provider_profiles (
+          id TEXT PRIMARY KEY,
+          tenant_id INTEGER NOT NULL,
+          provider_type TEXT NOT NULL CHECK (provider_type IN ('rclone')),
+          remote_name TEXT NOT NULL,
+          base_prefix TEXT NOT NULL DEFAULT '',
+          enabled INTEGER NOT NULL DEFAULT 1,
+          provider_role TEXT NOT NULL CHECK (provider_role IN ('primary','secondary')),
+          capability_state TEXT NOT NULL DEFAULT 'unknown',
+          verification_status TEXT NOT NULL DEFAULT 'pending',
+          last_verified_at INTEGER,
+          failure_reason TEXT,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+          UNIQUE(tenant_id, id), UNIQUE(tenant_id, provider_role)
+        );
+        CREATE INDEX IF NOT EXISTS idx_backup_provider_profiles_tenant ON tenant_backup_provider_profiles(tenant_id, enabled);
+        ALTER TABLE tenant_backups ADD COLUMN backup_state TEXT NOT NULL DEFAULT 'LOCAL_ONLY';
+        ALTER TABLE tenant_backups ADD COLUMN remote_verified_at INTEGER;
+        ALTER TABLE tenant_backups ADD COLUMN restore_test_at INTEGER;
+        ALTER TABLE tenant_backups ADD COLUMN provider_profile_id TEXT;
+        ALTER TABLE tenant_backup_policies ADD COLUMN last_restore_test_backup TEXT;
+      `)
+    }
   }
 ]
 

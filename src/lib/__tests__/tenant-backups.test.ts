@@ -17,7 +17,7 @@ vi.mock('@/lib/tenant-export', () => ({ createTenantExport: vi.fn() }))
 
 import { decryptBackup, deriveTestKey, encryptBackup, inspectAndExtractPackage, sha256File } from '@/lib/backup-format'
 import { getTenantBackupPolicy, listTenantBackups } from '@/lib/tenant-backups'
-import { localFilesystemProvider } from '@/lib/backup-provider'
+import { localFilesystemProvider, createRcloneProvider } from '@/lib/backup-provider'
 
 const user = { id: 1, username: 'tester', role: 'admin', workspace_id: 11, tenant_id: 1 } as any
 let temp = ''
@@ -50,6 +50,23 @@ describe('encrypted backup primitives', () => {
     expect(localFilesystemProvider.list('tnt_beta')).toHaveLength(0)
     expect(() => localFilesystemProvider.download('tnt_beta', 'bkp_one.mcbackup', destination)).toThrow()
     expect(() => localFilesystemProvider.upload('tnt_alpha', '../escape.mcbackup', source)).toThrow()
+  })
+
+  it('exercises the bounded rclone adapter against an isolated local backend', () => {
+    const source = path.join(temp, 'source.mcbackup'), destination = path.join(temp, 'download.mcbackup'), remote = `tmp-rclone-test-${Date.now()}`, rcloneConfig = path.join(temp, 'rclone.conf')
+    fs.mkdirSync(remote); fs.writeFileSync(source, 'isolated encrypted artifact')
+    fs.writeFileSync(rcloneConfig, '[isolated]\ntype = local\n')
+    const old = { config: process.env.MC_RCLONE_CONFIG, allowed: process.env.MC_RCLONE_ALLOWED_REMOTES }
+    process.env.MC_RCLONE_CONFIG = rcloneConfig; process.env.MC_RCLONE_ALLOWED_REMOTES = 'isolated'
+    try {
+      const provider = createRcloneProvider({ id: 'test', remoteName: 'isolated', basePrefix: remote, enabled: true, role: 'primary' })
+      provider.upload('tnt_alpha', 'bkp_one.mcbackup', source)
+      expect(provider.list('tnt_alpha')).toHaveLength(1)
+      expect(provider.verify('tnt_alpha', 'bkp_one.mcbackup', sha256File(source), fs.statSync(source).size).sha256).toBe(sha256File(source))
+      provider.download('tnt_alpha', 'bkp_one.mcbackup', destination); expect(fs.readFileSync(destination, 'utf8')).toBe('isolated encrypted artifact')
+      expect(() => provider.download('tnt_beta', 'bkp_one.mcbackup', path.join(temp, 'foreign'))).toThrow()
+      expect(() => createRcloneProvider({ id: 'bad', remoteName: 'isolated', basePrefix: '../escape', enabled: true, role: 'primary' })).toThrow()
+    } finally { if (old.config === undefined) delete process.env.MC_RCLONE_CONFIG; else process.env.MC_RCLONE_CONFIG = old.config; if (old.allowed === undefined) delete process.env.MC_RCLONE_ALLOWED_REMOTES; else process.env.MC_RCLONE_ALLOWED_REMOTES = old.allowed; fs.rmSync(remote, { recursive: true, force: true }) }
   })
 
   it('rejects package symlinks before extraction', () => {
