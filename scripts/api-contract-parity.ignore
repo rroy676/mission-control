@@ -15,3 +15,8 @@ GET /api/gateways/control
 POST /api/gateways/control
 GET /api/mcp-audit/verify
 POST /api/hermes/events
+# Tenant-scoped encrypted backup surface; schemas are documented in docs/backup-recovery.md.
+GET /api/tenant-backups
+PUT /api/tenant-backups
+POST /api/tenant-backups
+POST /api/tenant-backups/{backupId}/verify

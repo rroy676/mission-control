@@ -13,6 +13,7 @@ import { syncLocalAgents } from './local-agent-sync'
 import { dispatchAssignedTasks, runAegisReviews, requeueStaleTasks, autoRouteInboxTasks, reconcileDeferredTaskCompletions } from './task-dispatch'
 import { spawnRecurringTasks } from './recurring-tasks'
 import { resolveSharedRuntimeWorkspaceId } from './workspace-isolation'
+import { runScheduledTenantBackups } from './tenant-backups'
 
 const BACKUP_DIR = join(dirname(config.dbPath), 'backups')
 
@@ -325,6 +326,15 @@ export function initScheduler() {
     running: false,
   })
 
+  tasks.set('tenant_backup', {
+    name: 'Tenant Encrypted Backup',
+    intervalMs: DAILY_MS,
+    lastRun: null,
+    nextRun: now + getNextDailyMs(3),
+    enabled: false,
+    running: false,
+  })
+
   tasks.set('auto_cleanup', {
     name: 'Auto Cleanup',
     intervalMs: DAILY_MS,
@@ -449,6 +459,7 @@ async function tick() {
 
     // Check if this task is enabled in settings (heartbeat is always enabled)
     const settingKey = id === 'auto_backup' ? 'general.auto_backup'
+      : id === 'tenant_backup' ? 'general.tenant_backup'
       : id === 'auto_cleanup' ? 'general.auto_cleanup'
       : id === 'webhook_retry' ? 'webhooks.retry_enabled'
       : id === 'claude_session_scan' ? 'general.claude_session_scan'
@@ -466,6 +477,7 @@ async function tick() {
     task.running = true
     try {
       const result = id === 'auto_backup' ? await runBackup()
+        : id === 'tenant_backup' ? await runScheduledTenantBackups()
         : id === 'agent_heartbeat' ? await runHeartbeatCheck()
         : id === 'webhook_retry' ? await processWebhookRetries()
         : id === 'claude_session_scan' ? await syncClaudeSessions()
@@ -511,6 +523,7 @@ export function getSchedulerStatus() {
 
   for (const [id, task] of tasks) {
     const settingKey = id === 'auto_backup' ? 'general.auto_backup'
+      : id === 'tenant_backup' ? 'general.tenant_backup'
       : id === 'auto_cleanup' ? 'general.auto_cleanup'
       : id === 'webhook_retry' ? 'webhooks.retry_enabled'
       : id === 'claude_session_scan' ? 'general.claude_session_scan'
@@ -540,6 +553,7 @@ export function getSchedulerStatus() {
 /** Manually trigger a scheduled task */
 export async function triggerTask(taskId: string, workspaceId?: number): Promise<{ ok: boolean; message: string }> {
   if (taskId === 'auto_backup') return runBackup()
+  if (taskId === 'tenant_backup') return runScheduledTenantBackups()
   if (taskId === 'auto_cleanup') return runCleanup()
   if (taskId === 'agent_heartbeat') return runHeartbeatCheck()
   if (taskId === 'webhook_retry') return processWebhookRetries()

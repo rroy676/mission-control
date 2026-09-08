@@ -38,6 +38,7 @@ import { NodesPanel } from '@/components/panels/nodes-panel'
 import { ExecApprovalPanel } from '@/components/panels/exec-approval-panel'
 import { SystemMonitorPanel } from '@/components/panels/system-monitor-panel'
 import { ModelProfilesPanel } from '@/components/panels/model-profiles-panel'
+import { BackupRecoveryPanel } from '@/components/panels/backup-recovery-panel'
 import { CompanyObservabilityPanel } from '@/components/panels/company-observability-panel'
 import { ChatPagePanel } from '@/components/panels/chat-page-panel'
 import { ChatPanel } from '@/components/chat/chat-panel'
@@ -575,6 +576,8 @@ function ContentRouter({ tab }: { tab: string }) {
       return <CompanyObservabilityPanel />
     case 'model-profiles':
       return <ModelProfilesPanel />
+    case 'backup':
+      return <BackupRecoveryPanel />
     case 'tasks':
       return <TaskBoardPanel />
     case 'agents':

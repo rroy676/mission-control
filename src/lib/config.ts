@@ -91,6 +91,8 @@ export const config = {
   durableArchiveRoot: process.env.MC_DURABLE_ARCHIVE_ROOT || path.resolve(process.cwd(), '..', 'autonomous-company', 'Software-Studio'),
   durableRepoRoot: process.env.MC_DURABLE_REPO_ROOT || path.resolve(process.cwd(), '..', 'autonomous-company'),
   exportDir: process.env.MC_EXPORT_DIR || path.join(resolvedDataDir, 'exports'),
+  backupRoot: process.env.MC_BACKUP_ROOT || path.join(os.homedir(), 'mission-control-backups'),
+  backupKeyFile: process.env.MC_BACKUP_KEY_FILE || path.join(os.homedir(), '.config', 'mission-control', 'backup-recovery.key'),
   dbPath: resolvedDbPath,
   tokensPath: resolvedTokensPath,
   // Keep openclawHome as a legacy alias for existing code paths.

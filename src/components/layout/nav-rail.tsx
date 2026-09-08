@@ -81,6 +81,7 @@ const navGroups: NavGroup[] = [
       { id: 'debug', label: 'Debug', icon: <DebugIcon />, priority: false },
       { id: 'settings', label: 'Settings', icon: <SettingsIcon />, priority: false, essential: true },
       { id: 'model-profiles', label: 'Model Profiles', icon: <TokensIcon />, priority: false },
+      { id: 'backup', label: 'Backup & Recovery', icon: <SecurityIcon />, priority: false },
     ],
   },
 ]

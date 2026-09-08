@@ -1788,6 +1788,61 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_durable_promotions_memory ON durable_promotions(tenant_id, memory_id);
       `)
     }
+  },
+  {
+    id: '060_tenant_encrypted_backups',
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS tenant_backup_policies (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id INTEGER NOT NULL UNIQUE,
+          enabled INTEGER NOT NULL DEFAULT 0,
+          local_snapshot_policy TEXT NOT NULL DEFAULT 'portable-tenant-export',
+          primary_provider TEXT NOT NULL DEFAULT 'local-filesystem',
+          secondary_provider TEXT,
+          retention_count INTEGER NOT NULL DEFAULT 7,
+          retention_period TEXT NOT NULL DEFAULT 'daily',
+          encryption_profile_ref TEXT NOT NULL DEFAULT 'local-default',
+          export_schedule TEXT NOT NULL DEFAULT 'manual',
+          backup_schedule TEXT NOT NULL DEFAULT 'manual',
+          integrity_check_schedule TEXT NOT NULL DEFAULT 'manual',
+          restore_test_schedule TEXT NOT NULL DEFAULT 'manual',
+          last_successful_backup INTEGER,
+          last_verified_backup INTEGER,
+          last_restore_test INTEGER,
+          status TEXT NOT NULL DEFAULT 'not_configured',
+          failure_reason TEXT,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_tenant_backup_policies_status ON tenant_backup_policies(status);
+
+        CREATE TABLE IF NOT EXISTS tenant_backups (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          backup_id TEXT NOT NULL UNIQUE,
+          tenant_id INTEGER NOT NULL,
+          provider TEXT NOT NULL,
+          object_id TEXT NOT NULL,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          export_schema_version TEXT NOT NULL,
+          application_commit TEXT NOT NULL,
+          encrypted_size INTEGER NOT NULL,
+          encrypted_sha256 TEXT NOT NULL,
+          encryption_format TEXT NOT NULL,
+          encryption_profile_ref TEXT NOT NULL,
+          upload_status TEXT NOT NULL DEFAULT 'pending',
+          remote_verification_status TEXT NOT NULL DEFAULT 'pending',
+          restore_verification_status TEXT NOT NULL DEFAULT 'pending',
+          retention_state TEXT NOT NULL DEFAULT 'retained',
+          failure_reason TEXT,
+          audit_reference TEXT,
+          FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_tenant_backups_tenant_created ON tenant_backups(tenant_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_tenant_backups_tenant_status ON tenant_backups(tenant_id, restore_verification_status);
+      `)
+    }
   }
 ]
 
