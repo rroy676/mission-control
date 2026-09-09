@@ -11,6 +11,7 @@ PORT="${PORT:-3000}"
 LISTEN_HOST="${MC_HOSTNAME:-${HOSTNAME:-0.0.0.0}}"
 LOG_PATH="${LOG_PATH:-/tmp/mc.log}"
 VERIFY_HOST="${VERIFY_HOST:-$LISTEN_HOST}"
+VERIFY_HOST_HEADER="${VERIFY_HOST_HEADER:-localhost:$PORT}"
 PID_FILE="${PID_FILE:-$PROJECT_ROOT/.next/standalone/server.pid}"
 SOURCE_DATA_DIR="$PROJECT_ROOT/.data"
 BUILD_DATA_DIR="$PROJECT_ROOT/.next/build-runtime"
@@ -237,13 +238,13 @@ fi
 
 echo "==> verifying process and static assets"
 for _ in $(seq 1 20); do
-  if curl -fsS "http://$VERIFY_HOST:$PORT/login" >/dev/null 2>&1; then
+  if curl -fsS -H "Host: $VERIFY_HOST_HEADER" "http://$VERIFY_HOST:$PORT/login" >/dev/null 2>&1; then
     break
   fi
   sleep 1
 done
 
-login_html="$(curl -fsS "http://$VERIFY_HOST:$PORT/login")"
+login_html="$(curl -fsS -H "Host: $VERIFY_HOST_HEADER" "http://$VERIFY_HOST:$PORT/login")"
 css_path="$(printf '%s\n' "$login_html" | sed -n 's|.*\(/_next/static/chunks/[^"]*\.css\).*|\1|p' | sed -n '1p')"
 if [[ -z "${css_path:-}" ]]; then
   echo "error: no css asset found in rendered login HTML" >&2
@@ -266,7 +267,7 @@ if [[ ! -f "$css_disk_path" ]]; then
   exit 1
 fi
 
-content_type="$(curl -fsSI "http://$VERIFY_HOST:$PORT$css_path" | awk 'BEGIN{IGNORECASE=1} /^content-type:/ {print $2}' | tr -d '\r')"
+content_type="$(curl -fsSI -H "Host: $VERIFY_HOST_HEADER" "http://$VERIFY_HOST:$PORT$css_path" | awk 'BEGIN{IGNORECASE=1} /^content-type:/ {print $2}' | tr -d '\r')"
 if [[ "${content_type:-}" != text/css* ]]; then
   echo "error: css asset served with unexpected content-type: ${content_type:-missing}" >&2
   exit 1
