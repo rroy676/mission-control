@@ -382,7 +382,16 @@ async function getSystemStatus(workspaceId: number, includeGlobalRuntime: boolea
 }
 
 async function getGatewayStatus() {
+  const optional = process.env.NEXT_PUBLIC_GATEWAY_OPTIONAL === 'true'
+  const configured = optional || Boolean(
+    process.env.OPENCLAW_GATEWAY_HOST || process.env.OPENCLAW_GATEWAY_PORT ||
+    process.env.GATEWAY_HOST || process.env.GATEWAY_PORT ||
+    (config.openclawConfigPath && existsSync(config.openclawConfigPath))
+  )
   const gatewayStatus: any = {
+    configured,
+    optional,
+    state: optional ? 'OPTIONAL' : configured ? 'OFFLINE' : 'NOT_CONFIGURED',
     running: false,
     port: config.gatewayPort,
     pid: null,
@@ -423,6 +432,10 @@ async function getGatewayStatus() {
     } catch (innerError) {
       gatewayStatus.version = 'unknown'
     }
+  }
+
+  if (gatewayStatus.running || gatewayStatus.port_listening) {
+    gatewayStatus.state = 'ONLINE'
   }
 
   return gatewayStatus
@@ -538,10 +551,18 @@ async function performHealthCheck() {
   // Check gateway connection
   try {
     const gatewayStatus = await getGatewayStatus()
+    const gatewayStatusName = gatewayStatus.state === 'OPTIONAL' || gatewayStatus.state === 'NOT_CONFIGURED'
+      ? 'healthy'
+      : gatewayStatus.running ? 'healthy' : 'unhealthy'
     health.checks.push({
       name: 'Gateway',
-      status: gatewayStatus.running ? 'healthy' : 'unhealthy',
-      message: gatewayStatus.running ? 'Gateway is running' : 'Gateway is not running'
+      status: gatewayStatusName,
+      state: gatewayStatus.state,
+      message: gatewayStatus.state === 'OPTIONAL'
+        ? 'Gateway is optional and not configured for this deployment'
+        : gatewayStatus.state === 'NOT_CONFIGURED'
+          ? 'Gateway is not configured'
+          : gatewayStatus.running ? 'Gateway is running' : 'Gateway is configured but offline'
     })
   } catch (error) {
     health.checks.push({

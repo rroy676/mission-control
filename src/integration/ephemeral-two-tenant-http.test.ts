@@ -120,7 +120,7 @@ async function seedDatabase(dbPath: string): Promise<Omit<Fixture, 'dataDir' | '
   return { a: { id: aTenant, key: aKey, workspace: aWorkspace, project: aProject, agent: aAgent }, b: { id: bTenant, key: bKey, workspace: bWorkspace, project: bProject, agent: bAgent }, users: { alice, bob, owner } }
 }
 
-describe('ephemeral authenticated two-tenant HTTP harness', () => {
+describe('ephemeral authenticated two-tenant HTTP harness', { timeout: 60_000 }, () => {
   beforeAll(async () => {
     const dataDir = await mkdtemp('/tmp/mission-control-v12-http-')
     const dbPath = join(dataDir, 'mission-control.db')

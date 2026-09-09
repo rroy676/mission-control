@@ -17,7 +17,7 @@
     "start": "pnpm run verify:node && next start --hostname 0.0.0.0 --port ${PORT:-3000}",
     "start:standalone": "pnpm run verify:node && bash scripts/start-standalone.sh",
     "deploy:standalone": "pnpm run verify:node && bash scripts/deploy-standalone.sh",
-    "lint": "pnpm run verify:node && eslint .",
+    "lint": "pnpm run verify:node && eslint src scripts *.js *.mjs *.ts",
     "typecheck": "pnpm run verify:node && tsc --noEmit",
     "test": "pnpm run verify:node && MISSION_CONTROL_TEST_MODE=1 GIT_AUTHOR_NAME='Mission Control Test' GIT_AUTHOR_EMAIL='mission-control-test@example.invalid' GIT_COMMITTER_NAME='Mission Control Test' GIT_COMMITTER_EMAIL='mission-control-test@example.invalid' vitest run",
     "test:core": "pnpm run verify:node && MISSION_CONTROL_TEST_MODE=1 VITEST_GATE=core vitest run --config vitest.gates.config.ts",

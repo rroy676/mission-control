@@ -196,7 +196,12 @@ function getSessionInfo() {
 async function getGatewayInfo() {
   const host = config.gatewayHost
   const port = config.gatewayPort
-  const configured = Boolean(host && port)
+  const optional = process.env.NEXT_PUBLIC_GATEWAY_OPTIONAL === 'true'
+  const configured = Boolean(
+    process.env.OPENCLAW_GATEWAY_HOST || process.env.OPENCLAW_GATEWAY_PORT ||
+    process.env.GATEWAY_HOST || process.env.GATEWAY_PORT ||
+    (config.openclawConfigPath && existsSync(config.openclawConfigPath))
+  )
 
   let reachable = false
   if (configured) {
@@ -210,5 +215,6 @@ async function getGatewayInfo() {
     })
   }
 
-  return { configured, reachable, host, port }
+  const state = optional ? 'OPTIONAL' : reachable ? 'ONLINE' : configured ? 'OFFLINE' : 'NOT_CONFIGURED'
+  return { configured, optional, reachable, state, host, port }
 }

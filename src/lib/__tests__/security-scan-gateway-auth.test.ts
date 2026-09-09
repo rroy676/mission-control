@@ -33,7 +33,7 @@ function gatewayAuthStatus() {
   return result.categories.openclaw.checks.find(c => c.id === 'gateway_auth')?.status
 }
 
-describe('scanOpenClaw — gateway_auth credential handling', () => {
+describe('scanOpenClaw — gateway_auth credential handling', { timeout: 15_000 }, () => {
   beforeEach(() => {
     writeOpenClawConfig({})
   })

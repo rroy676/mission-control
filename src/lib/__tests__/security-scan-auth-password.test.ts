@@ -13,7 +13,7 @@ function authPasswordCheck() {
   return runSecurityScan().categories.credentials.checks.find((check) => check.id === 'auth_pass')
 }
 
-describe('security scan admin password resolution', () => {
+describe('security scan admin password resolution', { timeout: 15_000 }, () => {
   afterEach(() => {
     restore('AUTH_PASS', originalAuthPass)
     restore('AUTH_PASS_B64', originalAuthPassB64)

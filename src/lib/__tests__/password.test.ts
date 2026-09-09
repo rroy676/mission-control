@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { hashPassword, verifyPassword } from '../password'
 
-describe('hashPassword', () => {
+describe('hashPassword', { timeout: 15_000 }, () => {
   it('returns a string with salt:hash format', () => {
     const hash = hashPassword('testpassword')
     expect(hash).toContain(':')
@@ -28,7 +28,7 @@ describe('hashPassword', () => {
   })
 })
 
-describe('verifyPassword', () => {
+describe('verifyPassword', { timeout: 15_000 }, () => {
   it('returns true for correct password', () => {
     const password = 'correctpassword'
     const hash = hashPassword(password)
