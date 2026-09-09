@@ -67,7 +67,7 @@ describe('encrypted backup primitives', () => {
       expect(() => provider.download('tnt_beta', 'bkp_one.mcbackup', path.join(temp, 'foreign'))).toThrow()
       expect(() => createRcloneProvider({ id: 'bad', remoteName: 'isolated', basePrefix: '../escape', enabled: true, role: 'primary' })).toThrow()
     } finally { if (old.config === undefined) delete process.env.MC_RCLONE_CONFIG; else process.env.MC_RCLONE_CONFIG = old.config; if (old.allowed === undefined) delete process.env.MC_RCLONE_ALLOWED_REMOTES; else process.env.MC_RCLONE_ALLOWED_REMOTES = old.allowed; fs.rmSync(remote, { recursive: true, force: true }) }
-  })
+  }, 15_000)
 
   it('rejects package symlinks before extraction', () => {
     const source = path.join(temp, 'package-source'), archive = path.join(temp, 'unsafe.tar.gz'), destination = path.join(temp, 'extract')

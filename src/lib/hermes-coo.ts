@@ -62,10 +62,14 @@ export function bindingForSession(user: User, sessionId: string): HermesBinding 
   return row
 }
 
-export function createHermesTask(user: User, binding: HermesBinding, input: z.infer<typeof hermesCreateTaskSchema>) {
+export function createHermesTask(user: User, binding: HermesBinding, input: z.infer<typeof hermesCreateTaskSchema>, idempotencyKey?: string) {
   if (binding.tenantId !== user.tenant_id || binding.workspaceId !== user.workspace_id) throw new Error('Hermes binding is outside the active tenant/workspace')
   const db = getDatabase()
   resolveHermesProject(user, binding.projectId)
+  if (idempotencyKey) {
+    const existing = db.prepare("SELECT id, title, description, status, priority, project_id, assigned_to, created_by, created_at, updated_at FROM tasks WHERE workspace_id = ? AND json_extract(metadata, '$.hermes_idempotency_key') = ? LIMIT 1").get(binding.workspaceId, idempotencyKey)
+    if (existing) return { ...(existing as Record<string, unknown>), idempotent: true }
+  }
   if (input.assignee) {
     const exists = db.prepare('SELECT 1 FROM agents WHERE name = ? AND workspace_id = ?').get(input.assignee, binding.workspaceId)
     if (!exists) throw new Error('Assignee is not authorized in this workspace')
@@ -77,12 +81,12 @@ export function createHermesTask(user: User, binding: HermesBinding, input: z.in
     db.prepare('UPDATE projects SET ticket_counter = ticket_counter + 1, updated_at = unixepoch() WHERE id = ? AND workspace_id = ?').run(binding.projectId, binding.workspaceId)
     const ticket = db.prepare('SELECT ticket_counter FROM projects WHERE id = ? AND workspace_id = ?').get(binding.projectId, binding.workspaceId) as { ticket_counter: number } | undefined
     if (!ticket) throw new Error('Project ticket allocation failed')
-    const result = db.prepare(`INSERT INTO tasks (title, description, status, priority, project_id, project_ticket_no, assigned_to, created_by, created_at, updated_at, tags, metadata, workspace_id) VALUES (?, ?, 'inbox', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(input.title, description, input.priority, binding.projectId, ticket.ticket_counter, input.assignee || null, actor, now, now, JSON.stringify(input.labels), JSON.stringify({ source: 'hermes', hermes_session_id: binding.sessionId, dependencies: input.dependencies }), binding.workspaceId)
+    const result = db.prepare(`INSERT INTO tasks (title, description, status, priority, project_id, project_ticket_no, assigned_to, created_by, created_at, updated_at, tags, metadata, workspace_id) VALUES (?, ?, 'inbox', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(input.title, description, input.priority, binding.projectId, ticket.ticket_counter, input.assignee || null, actor, now, now, JSON.stringify(input.labels), JSON.stringify({ source: 'hermes', hermes_session_id: binding.sessionId, dependencies: input.dependencies, ...(idempotencyKey ? { hermes_idempotency_key: idempotencyKey } : {}) }), binding.workspaceId)
     return Number(result.lastInsertRowid)
   })()
   db_helpers.logActivity('task_created', 'task', taskId, actor, `Hermes created task: ${input.title}`, { runtime: 'hermes', hermes_session_id: binding.sessionId, tenant_id: binding.tenantId, project_id: binding.projectId }, binding.workspaceId)
   logAuditEvent({ action: 'hermes.create_task', actor, target_type: 'task', target_id: taskId, detail: { tenant_id: binding.tenantId, project_id: binding.projectId, session_id: binding.sessionId }, workspace_id: binding.workspaceId, tenant_id: binding.tenantId })
-  return db.prepare('SELECT id, title, description, status, priority, project_id, assigned_to, created_by, created_at, updated_at FROM tasks WHERE id = ? AND workspace_id = ?').get(taskId, binding.workspaceId)
+  return { ...(db.prepare('SELECT id, title, description, status, priority, project_id, assigned_to, created_by, created_at, updated_at FROM tasks WHERE id = ? AND workspace_id = ?').get(taskId, binding.workspaceId) as Record<string, unknown>), idempotent: false }
 }
 
 export function saveHermesMemory(user: User, binding: HermesBinding, input: { title: string; content: string; memory_type: 'current_state' | 'product_context' | 'operational_note' }) {

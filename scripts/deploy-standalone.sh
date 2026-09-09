@@ -8,9 +8,13 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 BRANCH="${BRANCH:-$(git -C "$PROJECT_ROOT" branch --show-current)}"
 PORT="${PORT:-3000}"
-LISTEN_HOST="${MC_HOSTNAME:-${HOSTNAME:-0.0.0.0}}"
+# Bind to the deterministic internal interface used by this deployment. The
+# machine hostname is not a reliable DNS or listener address.
+LISTEN_HOST="${MC_HOSTNAME:-172.20.0.1}"
 LOG_PATH="${LOG_PATH:-/tmp/mc.log}"
-VERIFY_HOST="${VERIFY_HOST:-$LISTEN_HOST}"
+# Verification must use a deterministic local route. LISTEN_HOST may be a
+# machine hostname that is not resolvable on the deployment host.
+VERIFY_HOST="${VERIFY_HOST:-172.20.0.1}"
 VERIFY_HOST_HEADER="${VERIFY_HOST_HEADER:-localhost:$PORT}"
 PID_FILE="${PID_FILE:-$PROJECT_ROOT/.next/standalone/server.pid}"
 SOURCE_DATA_DIR="$PROJECT_ROOT/.data"
@@ -245,7 +249,7 @@ for _ in $(seq 1 20); do
 done
 
 login_html="$(curl -fsS -H "Host: $VERIFY_HOST_HEADER" "http://$VERIFY_HOST:$PORT/login")"
-css_path="$(printf '%s\n' "$login_html" | sed -n 's|.*\(/_next/static/chunks/[^"]*\.css\).*|\1|p' | sed -n '1p')"
+css_path="$(printf '%s\n' "$login_html" | sed -n 's|.*\(/_next/static/[^"]*\.css\).*|\1|p' | sed -n '1p')"
 if [[ -z "${css_path:-}" ]]; then
   echo "error: no css asset found in rendered login HTML" >&2
   exit 1

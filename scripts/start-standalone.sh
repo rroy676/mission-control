@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 . "$PROJECT_ROOT/scripts/load-env.sh"
+REQUESTED_HOSTNAME="${HOSTNAME:-}"
 STANDALONE_DIR="$PROJECT_ROOT/.next/standalone"
 STANDALONE_NEXT_DIR="$STANDALONE_DIR/.next"
 STANDALONE_STATIC_DIR="$STANDALONE_NEXT_DIR/static"
@@ -43,7 +44,10 @@ export MISSION_CONTROL_DATA_DIR="${MISSION_CONTROL_DATA_DIR:-$PROJECT_ROOT/.data
 
 # Next.js standalone server reads HOSTNAME to decide bind address.
 # Default to 0.0.0.0 so the server is accessible from outside the host.
-export HOSTNAME="${HOSTNAME:-0.0.0.0}"
+# Preserve a caller-supplied bind address across .env loading. Deployment
+# passes the internal interface explicitly; machine hostname DNS is not part
+# of the listener contract.
+export HOSTNAME="${REQUESTED_HOSTNAME:-${HOSTNAME:-0.0.0.0}}"
 NODE_BIN="${MC_NODE_BIN:-node}"
 if [[ ! -x "$NODE_BIN" ]] && ! command -v "$NODE_BIN" >/dev/null 2>&1; then
   echo "error: configured Node binary is unavailable: $NODE_BIN" >&2

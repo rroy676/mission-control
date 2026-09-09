@@ -62,7 +62,7 @@ export async function runScheduledTenantBackups(): Promise<{ ok: boolean; messag
   const policies = db.prepare("SELECT * FROM tenant_backup_policies WHERE enabled=1 AND backup_schedule != 'manual'").all() as any[]
   let completed = 0; const failures: string[] = []
   for (const policy of policies.slice(0, 20)) {
-    const user = db.prepare(`SELECT u.* FROM users u JOIN tenant_memberships tm ON tm.user_id=u.id WHERE tm.tenant_id=? AND tm.role IN ('owner','admin') ORDER BY CASE WHEN tm.role='owner' THEN 0 ELSE 1 END, u.id LIMIT 1`).get(policy.tenant_id) as User | undefined
+    const user = db.prepare(`SELECT u.*, tm.tenant_id AS tenant_id FROM users u JOIN tenant_memberships tm ON tm.user_id=u.id WHERE tm.tenant_id=? AND tm.role IN ('owner','admin') ORDER BY CASE WHEN tm.role='owner' THEN 0 ELSE 1 END, u.id LIMIT 1`).get(policy.tenant_id) as User | undefined
     if (!user) { failures.push(`tenant ${policy.tenant_id}: no authorized service actor`); continue }
     try { await executeTenantBackup(user, undefined); completed++ } catch (error) { failures.push(`tenant ${policy.tenant_id}: ${error instanceof Error ? error.message : 'backup failed'}`) }
   }
@@ -76,7 +76,7 @@ export async function runScheduledRemoteRestoreTests(): Promise<{ ok: boolean; m
   let tested = 0; const failures: string[] = []; const now = Math.floor(Date.now() / 1000)
   for (const policy of policies.slice(0, 20)) {
     if (policy.last_restore_test && now - Number(policy.last_restore_test) < 86400) continue
-    const user = db.prepare(`SELECT u.* FROM users u JOIN tenant_memberships tm ON tm.user_id=u.id WHERE tm.tenant_id=? AND tm.role IN ('owner','admin') ORDER BY CASE WHEN tm.role='owner' THEN 0 ELSE 1 END, u.id LIMIT 1`).get(policy.tenant_id) as User | undefined
+    const user = db.prepare(`SELECT u.*, tm.tenant_id AS tenant_id FROM users u JOIN tenant_memberships tm ON tm.user_id=u.id WHERE tm.tenant_id=? AND tm.role IN ('owner','admin') ORDER BY CASE WHEN tm.role='owner' THEN 0 ELSE 1 END, u.id LIMIT 1`).get(policy.tenant_id) as User | undefined
     if (!user) { failures.push(`tenant ${policy.tenant_id}: no authorized service actor`); continue }
     const row = db.prepare(`SELECT * FROM tenant_backups WHERE tenant_id=? AND remote_verification_status='verified' ORDER BY CASE WHEN restore_verification_status='verified' THEN 1 ELSE 0 END, COALESCE(restore_test_at,0), created_at DESC LIMIT 1`).get(policy.tenant_id) as any
     if (!row) { failures.push(`tenant ${policy.tenant_id}: no verified remote recovery point`); continue }

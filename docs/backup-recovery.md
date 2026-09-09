@@ -34,6 +34,32 @@ Each tenant has a policy and tenant-scoped backup records. Records expose separa
 
 Automatic tenant backup scheduling is bounded and disabled by default (`general.tenant_backup`). Remote restore testing is a separate bounded, disabled-by-default task (`general.remote_restore_test`), tests at most one deterministic recovery point per tenant per day, and prefers points not recently tested. Retention fails closed when remote inventory is uncertain and never removes the only verified recovery point, a selected test point, or a point before replacement verification. Primary and optional secondary profile references are represented independently for future `PARTIAL_REPLICATION`.
 
-## Current operational evidence
+## Dropbox live acceptance evidence (2026-09-08/09)
+
+The approved primary off-site provider is the operator-configured Dropbox rclone remote `mc-backup`. The existing production tenant was used; no tenant was created. Its tenant-safe object namespace is:
+
+```text
+mc-backup:MissionControlBackups/tnt_aa2e8f95f863753fa35abdaced15a188/
+```
+
+The service registered `rclone:primary` with base prefix `MissionControlBackups`. A fresh backup was created through Mission Control as `bkp_b7822a7c-ef15-4cff-a12d-cb852fbd24d3.mcbackup`. The encrypted artifact was 7,361 bytes with SHA-256 `c6c1015ec701c3cbfa2a211b9c36d66df1c0b855d98ae243d901922b83c79634`; plaintext tenant data was not uploaded.
+
+Acceptance evidence:
+
+- Local encryption completed and the encrypted artifact checksum/size were recorded before provider completion.
+- Dropbox upload completed; `lsjson` found the exact tenant-scoped object and `rclone size` reported 7,361 bytes.
+- Mission Control remote verification returned `OFFSITE_VERIFIED` with the matching SHA-256.
+- The actual Dropbox object was downloaded twice into new mode-700 staging directories; the final copy matched size and SHA-256.
+- `node scripts/verify-tenant-backup.mjs` independently returned `verified` and validated 11 required files using the external recovery-key reference. It did not use the Mission Control web/API application and did not write live data.
+- The controlled `remote_restore_test` scheduler cycle returned `Remote restore tests: 1/1`. The policy and backup record now show `RESTORE_VERIFIED`, with restore-test timestamp and selected backup ID recorded; audit entries exist for creation, remote verification, and restore verification.
+- Retention remained `retained`; no Dropbox recovery point was deleted. Successful operation produced no `backup_failure` notification. Notification behavior was inspected without injecting a failure against the real recovery point.
+
+Production health after deployment: `/api/health` returned `ok`; authenticated login, `/api/auth/me`, and tenant membership remained healthy. Database, process memory, disk, and Mission Control service health were healthy; the separately optional gateway remained not running.
+
+The scheduler service-actor tenant-context defect found during acceptance was fixed by selecting the joined membership tenant ID in both scheduled tenant-backup paths. Node 22 verification, core (118/118), integration (23/23), slow (15/15), production build, and standalone artifact checks passed. Full-repository ESLint exhausted its heap; the broad suite completed with 1,610 passing and five default-timeout failures (three ephemeral two-tenant HTTP tests and two password tests), classified as known timing/resource-sensitive non-backup failures. Focused backup/security tests passed 21/21. The normal standalone deployment completed rebuild and managed-service restart; its hostname-specific verification raced the listener, while direct post-deploy health and login-route checks passed.
+
+This evidence promotes the real Dropbox off-site recovery chain: ENCRYPT → DROPBOX UPLOAD → REMOTE VERIFY → DROPBOX DOWNLOAD → INDEPENDENT RESTORE VERIFY.
+
+## Historical operational evidence
 
 The first provider is intentionally local and deterministic. Inspection found `rclone v1.60.1-DEV`, no config file, and no configured remote names: `OFFSITE_CONFIGURATION_REQUIRED`. Configure a real provider locally after security review; never put credentials in tenant policy rows. For Backblaze B2, use the interactive local procedure: `rclone --config "$MC_RCLONE_CONFIG" config`, then `rclone --config "$MC_RCLONE_CONFIG" listremotes`. Set `MC_RCLONE_ALLOWED_REMOTES` to the exact remote name and set `MC_RCLONE_PROFILE_primary_REMOTE` plus `MC_RCLONE_PROFILE_primary_PREFIX` in the Mission Control service environment. Select `rclone:primary` in the tenant policy and restart the service. Acceptance requires upload → remote verify → isolated download → independent restore verification.
