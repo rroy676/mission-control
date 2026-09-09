@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
 
     if (runtime === 'hermes') {
       try {
-        const delivered = await sendHermesMessage({ tenantId: auth.user.tenant_id, workspaceId, agentId: agent.id, projectId, message: `Message from ${from}: ${message}`, actor: from })
+        const delivered = await sendHermesMessage({ tenantId: auth.user.tenant_id, workspaceId, agentId: agent.id, projectId, message: `Message from ${from}: ${message}`, actor: from, actorUser: auth.user })
         recordHermesInteraction({ tenantId: auth.user.tenant_id, workspaceId, agentId: agent.id, projectId, actor: from, message, response: delivered.response, sessionId: delivered.sessionId })
         db_helpers.createNotification(to, 'message', 'Direct Message', `Hermes: ${delivered.response.substring(0, 200)}${delivered.response.length > 200 ? '...' : ''}`, 'agent', agent.id, workspaceId)
         db_helpers.logActivity('agent_message', 'agent', agent.id, from, `Sent message to ${to} via Hermes`, { to, runtime: 'hermes', project_id: projectId, hermes_session_id: delivered.sessionId }, workspaceId)

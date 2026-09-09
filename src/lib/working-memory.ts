@@ -28,7 +28,17 @@ function verifyRef(db: Database.Database, tenant: TenantContext, kind: 'project'
 function tenantKey(db: Database.Database, id: number) { return (db.prepare('SELECT tenant_key FROM tenants WHERE id=?').get(id) as { tenant_key: string }).tenant_key }
 function workspaceId(db: Database.Database, tenantId: number) { return (db.prepare('SELECT id FROM workspaces WHERE tenant_id=? ORDER BY id LIMIT 1').get(tenantId) as { id: number } | undefined)?.id || 1 }
 function activity(db: Database.Database, tenant: TenantContext, actor: string, type: string, memoryId: string, description: string, data: Record<string, unknown>) { db.prepare('INSERT INTO activities (type, entity_type, entity_id, actor, description, data, created_at, tenant_id, workspace_id) VALUES (?,?,?,?,?,?,unixepoch(),?,?)').run(type, 'working_memory', 0, actor, description, json({ ...data, memory_id: memoryId, tenant_id: tenant.id }), tenant.id, workspaceId(db, tenant.id)) }
-function activeContext(user: User, key?: string | null): TenantContext { const context = requireTenantContext(user, key); if (!('id' in context)) throw new Error('Tenant context is missing or unauthorized'); return context }
+function activeContext(user: User, key?: string | null): TenantContext {
+  // Global API authentication is already resolved to the server's default
+  // tenant/workspace. It has no user-membership row by design; preserve the
+  // same tenant key resolution while keeping all record queries tenant-first.
+  if (user.id <= 0 && !key) {
+    const db = getDatabase()
+    const row = db.prepare('SELECT id, tenant_key, slug, display_name, status FROM tenants WHERE id = ? AND status != \'decommissioned\'').get(user.tenant_id) as { id: number; tenant_key: string; slug: string; display_name: string; status: string } | undefined
+    if (row) return { id: row.id, tenantKey: row.tenant_key, slug: row.slug, displayName: row.display_name, status: row.status, membershipRole: 'owner', userId: user.id }
+  }
+  const context = requireTenantContext(user, key); if (!('id' in context)) throw new Error('Tenant context is missing or unauthorized'); return context
+}
 
 export function createMemory(user: User, input: MemoryInput, requestedTenantKey?: string | null): PortableMemory {
   const context = activeContext(user, requestedTenantKey)

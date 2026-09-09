@@ -66,3 +66,32 @@ Future adapters should implement the same server-side selection boundary and
 must not add unrestricted RPC, shell, PTY, terminal, or direct database access.
 OpenClaw is intentionally absent and OPTIONAL; future agents must not reinstall
 it to repair Hermes.
+
+## COO project context and action boundary
+
+Mission Control resolves a selected project from the authenticated user's
+tenant/workspace membership. The browser-provided project identifier is only a
+lookup hint; it is never trusted as authority. Foreign tenant/workspace or
+inactive projects fail closed. Hermes bindings are unique per tenant,
+workspace, agent, and project, so switching projects selects a separate
+session and cannot retain the prior project's transcript.
+
+For a project-bound turn, MC injects a bounded JSON context containing the
+server-resolved project identity, the active current-state memory, up to eight
+other active project memories, and (for Quebec Grocery Intelligence) the
+allowlisted `knowledge/quebec-grocery-intelligence-master-plan.md` document.
+The document is read through the Mission Control knowledge path; Hermes has no
+filesystem authority. A missing document is represented as missing and must
+not be inferred or recreated.
+
+Hermes may emit only `CREATE_TASK`, `SAVE_WORKING_MEMORY`, or
+`REQUEST_CEO_APPROVAL` inside the structured action envelope. MC validates the
+action, rechecks the session binding and tenant/project authority, attributes
+the write to Hermes, uses the bounded task/memory service, and records both
+activity and tenant-scoped audit evidence. CEO approval remains required for
+paid licensing, pricing or business-model changes, capital spending, major
+legal/privacy risk acceptance, architecture changes, and financial transfers.
+
+The Hermes API-server profile is configured with an empty platform toolset.
+This keeps shell, PTY, spawn, arbitrary filesystem, and generic HTTP tools out
+of the COO path; structured actions are executed by Mission Control only.

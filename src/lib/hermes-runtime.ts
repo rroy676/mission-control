@@ -1,5 +1,7 @@
 import { getDatabase, logAuditEvent } from '@/lib/db'
 import { logger } from '@/lib/logger'
+import { buildHermesProjectContext, createHermesTask, hermesCreateTaskSchema, saveHermesMemory } from '@/lib/hermes-coo'
+import type { User } from '@/lib/auth'
 
 const REQUEST_TIMEOUT_MS = 15_000
 export type HermesErrorCode = 'not_configured' | 'unavailable' | 'authentication' | 'session' | 'invalid_response'
@@ -27,7 +29,17 @@ export async function checkHermesHealth() {
   catch (error) { return { available: false, status: error instanceof HermesRuntimeError && error.code === 'authentication' ? 'DEGRADED' : 'OFFLINE' } }
 }
 function sessionIdFor(tenantId: number, workspaceId: number, agentId: number, projectId: number | null) { return `mc_${tenantId}_${workspaceId}_${agentId}_${projectId || 'default'}` }
-export async function sendHermesMessage(input: { tenantId: number; workspaceId: number; agentId: number; projectId?: number | null; message: string; systemMessage?: string; actor: string }) {
+function extractAction(content: string): { action: string; parameters: Record<string, unknown> } | null {
+  const match = content.match(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/i)
+  if (!match) return null
+  try {
+    const parsed = JSON.parse(match[1]) as { name?: string; arguments?: Record<string, unknown> }
+    if (!parsed.name || !['CREATE_TASK', 'SAVE_WORKING_MEMORY', 'REQUEST_CEO_APPROVAL'].includes(parsed.name)) return null
+    return { action: parsed.name, parameters: parsed.arguments || {} }
+  } catch { return null }
+}
+
+export async function sendHermesMessage(input: { tenantId: number; workspaceId: number; agentId: number; projectId?: number | null; message: string; systemMessage?: string; actor: string; actorUser?: User }) {
   const db = getDatabase(), projectId = input.projectId ?? null
   const existing = db.prepare('SELECT hermes_session_id FROM hermes_runtime_bindings WHERE tenant_id = ? AND workspace_id = ? AND agent_id = ? AND project_id IS ?').get(input.tenantId, input.workspaceId, input.agentId, projectId) as { hermes_session_id: string } | undefined
   const sessionId = existing?.hermes_session_id || sessionIdFor(input.tenantId, input.workspaceId, input.agentId, projectId)
@@ -36,13 +48,29 @@ export async function sendHermesMessage(input: { tenantId: number; workspaceId: 
     if (created.response.status !== 201 && created.response.status !== 409) throw new HermesRuntimeError('session', 'Hermes session unavailable')
     db.prepare('INSERT OR IGNORE INTO hermes_runtime_bindings (tenant_id, workspace_id, agent_id, project_id, hermes_session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, unixepoch(), unixepoch())').run(input.tenantId, input.workspaceId, input.agentId, projectId, sessionId)
   }
-  const body: Record<string, unknown> = { message: input.message }; if (input.systemMessage) body.system_message = input.systemMessage
+  let system = input.systemMessage || ''
+  if (input.projectId && input.actorUser) {
+    const context = await buildHermesProjectContext(input.actorUser, input.projectId)
+    system += `\n\nMission Control COO boundary: You are bound to tenant ${input.tenantId}, project ${context.project.name} (id ${context.project.id}), agent ${input.agentId}, actor ${input.actor}. You have no filesystem, shell, PTY, spawn, or arbitrary HTTP authority. Use only the structured actions below, emitting exactly one JSON object inside <tool_call> tags when an action is required. Allowed names: CREATE_TASK, SAVE_WORKING_MEMORY, REQUEST_CEO_APPROVAL. Project context (server-resolved):\n${JSON.stringify(context)}\nIf the requested knowledge file is absent, say so; never invent it. CEO approval is required for licensing, pricing, spending, legal/privacy acceptance, architecture changes, or transfers.`
+  }
+  const body: Record<string, unknown> = { message: input.message }; if (system) body.system_message = system
   const result = await request(`/api/sessions/${encodeURIComponent(sessionId)}/chat`, { method: 'POST', body: JSON.stringify(body) })
-  const response = result.body?.message?.content
+  let response = result.body?.message?.content
   if (typeof response !== 'string') throw new HermesRuntimeError('invalid_response', 'Hermes returned an invalid response', 502)
   const effectiveSessionId = typeof result.body?.session_id === 'string' ? result.body.session_id : sessionId
   db.prepare('UPDATE hermes_runtime_bindings SET hermes_session_id = ?, updated_at = unixepoch() WHERE tenant_id = ? AND workspace_id = ? AND agent_id = ? AND project_id IS ?').run(effectiveSessionId, input.tenantId, input.workspaceId, input.agentId, projectId)
-  return { sessionId: effectiveSessionId, response }
+  const actorUser = input.actorUser
+  const action = actorUser && input.projectId ? extractAction(response) : null
+  let actionResult: unknown = null
+  if (action && actorUser && input.projectId) {
+    const binding = { tenantId: input.tenantId, workspaceId: input.workspaceId, agentId: input.agentId, projectId: input.projectId, sessionId: effectiveSessionId }
+    if (action.action === 'CREATE_TASK') actionResult = createHermesTask(actorUser, binding, hermesCreateTaskSchema.parse(action.parameters))
+    else if (action.action === 'SAVE_WORKING_MEMORY') actionResult = saveHermesMemory(actorUser, binding, action.parameters as { title: string; content: string; memory_type: 'current_state' | 'product_context' | 'operational_note' })
+    else actionResult = { status: 'approval_required', message: 'CEO approval is required; no approval was granted.' }
+    const followup = await request(`/api/sessions/${encodeURIComponent(sessionId)}/chat`, { method: 'POST', body: JSON.stringify({ message: `<tool_response>${JSON.stringify({ action: action.action, result: actionResult })}</tool_response>`, system_message: 'Continue with a concise final answer. Do not emit another tool call.' }) })
+    if (typeof followup.body?.message?.content === 'string') response = followup.body.message.content
+  }
+  return { sessionId: effectiveSessionId, response, action: action?.action || null, actionResult }
 }
 export function recordHermesInteraction(input: { workspaceId: number; tenantId: number; agentId: number; actor: string; message: string; response: string; sessionId: string; projectId?: number | null }) {
   const db = getDatabase(), detail = { runtime: 'hermes', tenant_id: input.tenantId, project_id: input.projectId ?? null, session_id: input.sessionId, message_length: input.message.length, response_length: input.response.length }

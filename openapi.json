@@ -11021,6 +11021,15 @@
         }
       }
     },
+    "/api/hermes/actions": {
+      "post": {
+        "tags": ["Agents"],
+        "summary": "Execute an allowlisted Hermes COO action",
+        "operationId": "postHermesAction",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["action", "session_id"], "properties": { "action": { "type": "string", "enum": ["CREATE_TASK", "SAVE_WORKING_MEMORY", "REQUEST_CEO_APPROVAL"] }, "session_id": { "type": "string" }, "parameters": { "type": "object" } } } } } },
+        "responses": { "200": { "description": "Structured action result", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
     "/api/hermes/events": {
       "post": {
         "tags": [
