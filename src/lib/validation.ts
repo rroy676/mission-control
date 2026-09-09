@@ -242,6 +242,7 @@ export const createMessageSchema = z.object({
   to: z.string().min(1, 'Recipient is required'),
   message: z.string().min(1, 'Message is required'),
   from: z.string().optional().default('system'),
+  project_id: z.number().int().positive().optional(),
 })
 
 export const updateSettingsSchema = z.object({

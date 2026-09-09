@@ -1873,6 +1873,26 @@ const migrations: Migration[] = [
         ALTER TABLE tenant_backup_policies ADD COLUMN last_restore_test_backup TEXT;
       `)
     }
+  },
+  {
+    id: '062_hermes_runtime_bindings',
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS hermes_runtime_bindings (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, workspace_id INTEGER NOT NULL,
+          agent_id INTEGER NOT NULL, project_id INTEGER, hermes_session_id TEXT NOT NULL,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()), updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          UNIQUE(tenant_id, workspace_id, agent_id, project_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_hermes_bindings_scope ON hermes_runtime_bindings(tenant_id, workspace_id, agent_id);
+        CREATE TABLE IF NOT EXISTS hermes_interactions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, workspace_id INTEGER NOT NULL,
+          agent_id INTEGER NOT NULL, project_id INTEGER, session_id TEXT NOT NULL, actor TEXT NOT NULL,
+          message TEXT NOT NULL, response TEXT NOT NULL, outcome TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS idx_hermes_interactions_scope ON hermes_interactions(tenant_id, workspace_id, created_at DESC);
+      `)
+    }
   }
 ]
 

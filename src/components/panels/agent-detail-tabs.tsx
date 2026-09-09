@@ -142,7 +142,7 @@ export function OverviewTab({
     if (!directMessage.trim()) return
     try {
       setMessageStatus(null)
-      await apiFetch('/api/agents/message', {
+      const result = await apiFetch<{ response?: string }>('/api/agents/message', {
         method: 'POST',
         body: JSON.stringify({
           from: messageFrom || 'system',
@@ -151,10 +151,10 @@ export function OverviewTab({
         })
       })
       setDirectMessage('')
-      setMessageStatus(t('messageSent'))
+      setMessageStatus(result?.response ? result.response : t('messageSent'))
       setTimeout(() => setMessageStatus(null), 2000)
     } catch (error) {
-      setMessageStatus(t('messageFailed'))
+      setMessageStatus(error instanceof Error && error.message ? error.message : t('messageFailed'))
     }
   }
 

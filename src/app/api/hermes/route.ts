@@ -12,6 +12,7 @@ import { logAuditEvent } from '@/lib/db'
 import { extractClientIp, hermesMutationLimiter } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validation'
 import { formatHermesCommandOutput, hermesMutationSchema, parseHermesSetupCommand } from '@/lib/hermes-route-security'
+import { checkHermesHealth } from '@/lib/hermes-runtime'
 
 // In Docker, HOME=/nonexistent — check dataDir first, then homeDir
 import { resolve } from 'node:path'
@@ -37,6 +38,7 @@ export async function GET(request: NextRequest) {
   try {
     const installed = isHermesInstalled()
     const gatewayRunning = installed ? isHermesGatewayRunning() : false
+    const apiHealth = installed ? await checkHermesHealth() : { available: false, status: 'NOT_CONFIGURED' }
     const hookInstalled = existsSync(join(HOOK_DIR, 'HOOK.yaml'))
     const activeSessions = installed ? scanHermesSessions(50).filter(s => s.isActive).length : 0
 
@@ -46,6 +48,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       installed,
       gatewayRunning,
+      apiAvailable: apiHealth.available,
+      runtimeStatus: apiHealth.status,
+      apiVersion: apiHealth.version,
       hookInstalled,
       activeSessions,
       cronJobCount,
