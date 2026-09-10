@@ -47,7 +47,7 @@ function isGroupedWithPrevious(messages: ChatMessage[], index: number): boolean 
   )
 }
 
-export function MessageList() {
+export function MessageList({ onStartNewChat }: { onStartNewChat?: () => void }) {
   const { chatMessages, activeConversation, isSendingMessage, updatePendingMessage, removePendingMessage, addChatMessage } = useMissionControl()
   const bottomRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -136,6 +136,11 @@ export function MessageList() {
           </div>
           <p className="text-sm text-muted-foreground">Select a conversation</p>
           <p className="text-xs text-muted-foreground/50 mt-1">or start a new one with an agent</p>
+          {onStartNewChat && (
+            <Button type="button" size="sm" variant="outline" onClick={onStartNewChat} className="mt-4">
+              + Start New Chat
+            </Button>
+          )}
         </div>
       </div>
     )

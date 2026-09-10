@@ -9,6 +9,7 @@ import { scanForInjection, sanitizeForPrompt } from '@/lib/injection-guard'
 import { callOpenClawGateway } from '@/lib/openclaw-gateway'
 import { resolveCoordinatorDeliveryTarget } from '@/lib/coordinator-routing'
 import { getWorkspaceIsolation } from '@/lib/workspace-isolation'
+import { recordHermesInteraction, sendHermesMessage } from '@/lib/hermes-runtime'
 
 type ForwardInfo = {
   attempted: boolean
@@ -351,6 +352,50 @@ export async function POST(request: NextRequest) {
     const conversation_id = body.conversation_id || `conv_${Date.now()}`
     const metadata = body.metadata || null
 
+    // Hermes conversations are created by /api/chat/conversations and carry a
+    // server-owned binding in the conversation id. Resolve that binding here;
+    // never accept a client-supplied project id as authority.
+    const hermesSessionId = typeof conversation_id === 'string' && conversation_id.startsWith('hermes:')
+      ? conversation_id.slice('hermes:'.length)
+      : null
+    let hermesBinding = hermesSessionId
+      ? db.prepare('SELECT tenant_id as tenantId, workspace_id as workspaceId, agent_id as agentId, project_id as projectId, hermes_session_id as sessionId FROM hermes_runtime_bindings WHERE tenant_id = ? AND workspace_id = ? AND hermes_session_id = ?').get(auth.user.tenant_id ?? 1, workspaceId, hermesSessionId) as { tenantId: number; workspaceId: number; agentId: number; projectId: number | null; sessionId: string } | undefined
+      : undefined
+
+    if (hermesSessionId) {
+      if (!hermesBinding) {
+        const match = hermesSessionId.match(/^mc_(\d+)_(\d+)_(\d+)_(default|\d+)$/)
+        const candidateProjectId = match?.[4] && match[4] !== 'default' ? Number(match[4]) : null
+        const candidate = match && Number(match[1]) === (auth.user.tenant_id ?? 1) && Number(match[2]) === workspaceId
+          ? db.prepare('SELECT id, name, runtime_type FROM agents WHERE id = ? AND workspace_id = ? AND hidden = 0').get(Number(match[3]), workspaceId) as { id: number; name: string; runtime_type?: string | null } | undefined
+          : undefined
+        if (!candidate || String(candidate.runtime_type || '').toLowerCase() !== 'hermes') {
+          return NextResponse.json({ error: 'Hermes conversation is not available in this tenant' }, { status: 403 })
+        }
+        if (candidateProjectId !== null) {
+          const project = db.prepare(`
+            SELECT p.id FROM projects p JOIN workspaces w ON w.id = p.workspace_id
+            WHERE p.id = ? AND p.workspace_id = ? AND w.tenant_id = ? AND p.status = 'active'
+          `).get(candidateProjectId, workspaceId, auth.user.tenant_id ?? 1)
+          if (!project) return NextResponse.json({ error: 'Project is not accessible in this tenant' }, { status: 403 })
+        }
+        hermesBinding = {
+          tenantId: auth.user.tenant_id ?? 1,
+          workspaceId,
+          agentId: candidate.id,
+          projectId: candidateProjectId,
+          sessionId: hermesSessionId,
+        }
+      }
+      const boundAgent = db.prepare('SELECT name, runtime_type FROM agents WHERE id = ? AND workspace_id = ?').get(hermesBinding.agentId, workspaceId) as { name: string; runtime_type?: string | null } | undefined
+      if (!boundAgent || String(boundAgent.runtime_type || '').toLowerCase() !== 'hermes' || String(to || '').toLowerCase() !== boundAgent.name.toLowerCase()) {
+        return NextResponse.json({ error: 'Hermes conversation agent binding is invalid' }, { status: 403 })
+      }
+      if (body.project_id !== undefined && body.project_id !== null && Number(body.project_id) !== hermesBinding.projectId) {
+        return NextResponse.json({ error: 'Hermes conversation project binding is immutable' }, { status: 403 })
+      }
+    }
+
     if (!content) {
       return NextResponse.json(
         { error: '"content" is required' },
@@ -422,6 +467,45 @@ export async function POST(request: NextRequest) {
         const agent = db
           .prepare('SELECT * FROM agents WHERE lower(name) = lower(?) AND workspace_id = ?')
           .get(to, workspaceId) as any
+
+        if (hermesBinding && agent && Number(agent.id) === hermesBinding.agentId) {
+          try {
+            const result = await sendHermesMessage({
+              tenantId: hermesBinding.tenantId,
+              workspaceId: hermesBinding.workspaceId,
+              agentId: hermesBinding.agentId,
+              projectId: hermesBinding.projectId,
+              message: content,
+              actor: from,
+              actorUser: auth.user,
+            })
+            recordHermesInteraction({
+              tenantId: hermesBinding.tenantId,
+              workspaceId: hermesBinding.workspaceId,
+              agentId: hermesBinding.agentId,
+              projectId: hermesBinding.projectId,
+              sessionId: result.sessionId,
+              actor: from,
+              message: content,
+              response: result.response,
+            })
+            createChatReply(db, workspaceId, conversation_id, agent.name, from, result.response, 'text', {
+              runtime: 'hermes',
+              project_id: hermesBinding.projectId,
+              session_id: result.sessionId,
+            })
+            forwardInfo.delivered = true
+            forwardInfo.session = result.sessionId
+          } catch (err) {
+            forwardInfo.reason = 'hermes_send_failed'
+            logger.error({ err }, 'Failed to send message through Hermes runtime')
+            createChatReply(db, workspaceId, conversation_id, agent.name, from, 'Hermes could not complete that message. Please retry.', 'status', {
+              runtime: 'hermes',
+              project_id: hermesBinding.projectId,
+              status: 'error',
+            })
+          }
+        } else {
 
         const explicitSessionKey = !strictWorkspace && typeof body.sessionKey === 'string' && body.sessionKey
           ? body.sessionKey
@@ -729,6 +813,7 @@ export async function POST(request: NextRequest) {
               }
             }
           }
+        }
         }
       }
     }

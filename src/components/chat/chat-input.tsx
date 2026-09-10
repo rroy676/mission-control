@@ -289,6 +289,7 @@ export function ChatInput({ onSend, onAbort, disabled, agents = [], isGenerating
         />
 
         <textarea
+          data-testid="chat-composer"
           ref={textareaRef}
           value={chatInput}
           onChange={handleChange}

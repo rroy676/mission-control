@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { useMissionControl, Conversation } from '@/store'
+import { useMissionControl, Conversation, ChatMessage } from '@/store'
 import { useSmartPoll } from '@/lib/use-smart-poll'
 import { apiFetch, ApiError } from '@/lib/api-client'
 import { createClientLogger } from '@/lib/client-logger'
@@ -124,10 +124,11 @@ const TAG_COLORS: Record<string, string> = {
 }
 
 interface ConversationListProps {
-  onNewConversation: (agentName: string) => void
+  onNewConversation: (agentName: string, projectId: number | null) => Promise<void> | void
+  openNewChatSignal?: number
 }
 
-export function ConversationList({ onNewConversation }: ConversationListProps) {
+export function ConversationList({ onNewConversation, openNewChatSignal = 0 }: ConversationListProps) {
   const {
     conversations,
     setConversations,
@@ -141,6 +142,14 @@ export function ConversationList({ onNewConversation }: ConversationListProps) {
   } = useMissionControl()
   const [search, setSearch] = useState('')
   const [initialLoading, setInitialLoading] = useState(conversations.length === 0)
+  const [newChatOpen, setNewChatOpen] = useState(false)
+  const [newAgent, setNewAgent] = useState('')
+  const [newProject, setNewProject] = useState('')
+  const [projects, setProjects] = useState<Array<{ id: number; name: string; status?: string }>>([])
+  const [projectsLoading, setProjectsLoading] = useState(false)
+  const [projectsError, setProjectsError] = useState<string | null>(null)
+  const [newChatBusy, setNewChatBusy] = useState(false)
+  const [newChatError, setNewChatError] = useState<string | null>(null)
 
   // Context menu state
   const [ctxMenu, setCtxMenu] = useState<{ convId: string; x: number; y: number } | null>(null)
@@ -175,6 +184,45 @@ export function ConversationList({ onNewConversation }: ConversationListProps) {
       editInputRef.current.select()
     }
   }, [editingId])
+
+  useEffect(() => {
+    const hermes = agents.find((agent) => String(agent.runtime_type || '').toLowerCase() === 'hermes' || agent.name.toLowerCase() === 'hermes')
+    if (!newAgent && hermes) setNewAgent(hermes.name)
+  }, [agents, newAgent])
+
+  const loadProjects = useCallback(async () => {
+    setProjectsLoading(true)
+    setProjectsError(null)
+    try {
+      // Keep this independent from the general API wrapper: the project selector
+      // must recover from a transient proxy/cache response while the chat shell
+      // remains usable.
+      // eslint-disable-next-line no-restricted-syntax -- this selector needs a no-store retry path.
+      const response = await fetch('/api/projects', {
+        credentials: 'include',
+        cache: 'no-store',
+        headers: { Accept: 'application/json' },
+      })
+      if (!response.ok) throw new Error(`Project list unavailable (${response.status})`)
+      const data = await response.json() as { projects?: Array<{ id: number; name: string; status?: string }> }
+      const activeProjects = Array.isArray(data.projects)
+        ? data.projects.filter((project) => project.status !== 'archived')
+        : []
+      setProjects(activeProjects)
+    } catch (error) {
+      setProjectsError(error instanceof Error ? error.message : 'Project list unavailable')
+    } finally {
+      setProjectsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (newChatOpen && projects.length === 0 && !projectsLoading && !projectsError) void loadProjects()
+  }, [loadProjects, newChatOpen, projects.length, projectsLoading, projectsError])
+
+  useEffect(() => {
+    if (openNewChatSignal > 0) setNewChatOpen(true)
+  }, [openNewChatSignal])
 
   const saveSessionPref = useCallback(async (conv: Conversation, name?: string, color?: string) => {
     const prefKey = conv.session?.prefKey
@@ -257,13 +305,16 @@ export function ConversationList({ onNewConversation }: ConversationListProps) {
       // `.ok ? parse : default` for INDEPENDENT graceful degradation, so each
       // request is caught on its own — a failed prefs fetch must not discard
       // successfully-loaded sessions (and vice versa).
-      const [sessionsData, prefs] = await Promise.all([
+      const [sessionsData, prefs, chatData] = await Promise.all([
         apiFetch<unknown>('/api/sessions')
           .then((payload) => readSessions(payload))
           .catch(() => [] as SessionRecord[]),
         apiFetch<unknown>('/api/chat/session-prefs')
           .then((payload) => readSessionPrefs(payload))
           .catch(() => ({} as SessionPrefs)),
+        apiFetch<unknown>('/api/chat/conversations')
+          .then((payload) => payload)
+          .catch(() => null),
       ])
 
       const providerSessions = sessionsData
@@ -326,8 +377,43 @@ export function ConversationList({ onNewConversation }: ConversationListProps) {
           }
         })
 
+      const chatRecord = asRecord(chatData)
+      const chatRows = Array.isArray(chatRecord?.conversations) ? chatRecord.conversations : []
+      const directConversations = chatRows.flatMap((value) => {
+        const row = asRecord(value)
+        const id = readString(row?.conversation_id)
+        if (!id || !id.startsWith('hermes:')) return []
+        const projectId = readNumber(row?.project_id) ?? null
+        const agentName = readString(row?.agent_name) || 'hermes'
+        const projectName = readString(row?.project_name) || null
+        const last = asRecord(row?.last_message)
+        const createdAt = readNumber(row?.last_message_at) || Math.floor(Date.now() / 1000)
+        return [{
+          id,
+          name: projectName ? `Hermes · ${projectName}` : 'Hermes · Company',
+          kind: 'hermes',
+          source: 'chat' as const,
+          agentName,
+          projectId,
+          projectName,
+          participants: [agentName],
+          lastMessage: last && typeof last.id === 'number' ? {
+            id: last.id,
+            conversation_id: id,
+            from_agent: readString(last.from_agent) || agentName,
+            to_agent: readString(last.to_agent) || null,
+            content: readString(last.content) || '',
+            message_type: (readString(last.message_type) || 'text') as ChatMessage['message_type'],
+            created_at: readNumber(last.created_at) || createdAt,
+          } : undefined,
+          unreadCount: readNumber(row?.unread_count) || 0,
+          updatedAt: createdAt,
+        }]
+      })
+
       setConversations(
-        providerSessions.sort((a: Conversation, b: Conversation) => b.updatedAt - a.updatedAt)
+        [...directConversations, ...providerSessions]
+          .sort((a: Conversation, b: Conversation) => b.updatedAt - a.updatedAt)
       )
       setInitialLoading(false)
     } catch (err) {
@@ -375,6 +461,22 @@ export function ConversationList({ onNewConversation }: ConversationListProps) {
     return a.name.toLowerCase().includes(search.toLowerCase())
   })
 
+  const hermesAgents = (agents || []).filter((agent) => String(agent.runtime_type || '').toLowerCase() === 'hermes' || agent.name.toLowerCase() === 'hermes')
+
+  const startNewChat = async () => {
+    if (!newAgent || newChatBusy) return
+    setNewChatBusy(true)
+    setNewChatError(null)
+    try {
+      await onNewConversation(newAgent, newProject ? Number(newProject) : null)
+      setNewChatOpen(false)
+    } catch (error) {
+      setNewChatError(error instanceof Error ? error.message : 'Failed to start chat')
+    } finally {
+      setNewChatBusy(false)
+    }
+  }
+
   function renderAgentItem(agent: { name: string; status?: string }) {
     const convId = `agent_${agent.name}`
     const isSelected = activeConversation === convId
@@ -383,7 +485,7 @@ export function ConversationList({ onNewConversation }: ConversationListProps) {
       <button
         key={`agent:${agent.name}`}
         type="button"
-        onClick={() => onNewConversation(agent.name)}
+        onClick={() => void onNewConversation(agent.name, null)}
         className={`w-full text-left px-3 py-2 transition-colors group ${
           isSelected
             ? 'bg-accent/60 border-l-2 border-primary'
@@ -530,9 +632,57 @@ export function ConversationList({ onNewConversation }: ConversationListProps) {
     <div className="flex flex-col h-full bg-card">
       {/* Header */}
       <div className="p-3 border-b border-border shrink-0">
-        <div className="mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-      Sessions
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Sessions</div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => { setNewChatOpen((open) => !open); setNewChatError(null) }}
+            aria-expanded={newChatOpen}
+            className="h-7 px-2 text-[11px]"
+          >
+            + New Chat
+          </Button>
         </div>
+        {newChatOpen && (
+          <div className="mb-2 rounded-md border border-primary/30 bg-surface-1 p-2.5">
+            <div className="mb-2 text-[10px] uppercase tracking-wider text-muted-foreground/70">New conversation</div>
+            <label className="mb-1 block text-[10px] text-muted-foreground" htmlFor="new-chat-agent">Agent</label>
+            <select
+              id="new-chat-agent"
+              aria-label="Agent"
+              value={newAgent}
+              onChange={(event) => setNewAgent(event.target.value)}
+              className="mb-2 h-8 w-full rounded border border-border/60 bg-card px-2 text-xs text-foreground"
+            >
+              <option value="">Choose an agent</option>
+              {hermesAgents.map((agent) => <option key={agent.id} value={agent.name}>Hermes{agent.name.toLowerCase() === 'hermes' ? '' : ` (${agent.name})`}</option>)}
+            </select>
+            <label className="mb-1 block text-[10px] text-muted-foreground" htmlFor="new-chat-project">Project</label>
+            <select
+              id="new-chat-project"
+              aria-label="Project"
+              value={newProject}
+              onChange={(event) => setNewProject(event.target.value)}
+              className="mb-2 h-8 w-full rounded border border-border/60 bg-card px-2 text-xs text-foreground"
+            >
+              <option value="">Company / general conversation</option>
+              {projectsLoading && <option value="" disabled>Loading projects...</option>}
+              {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+            </select>
+            {projectsError && (
+              <div className="mb-2 flex items-center justify-between gap-2 text-[11px] text-red-400">
+                <span>{projectsError}</span>
+                <button type="button" className="underline" onClick={() => void loadProjects()}>Retry</button>
+              </div>
+            )}
+            <Button type="button" size="sm" onClick={() => void startNewChat()} disabled={!newAgent || newChatBusy} className="h-8 w-full text-xs">
+              {newChatBusy ? 'Creating...' : 'Start Conversation'}
+            </Button>
+            {newChatError && <p className="mt-2 text-[11px] text-red-400">{newChatError}</p>}
+          </div>
+        )}
         <div className="relative">
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground/50">
             <circle cx="7" cy="7" r="4" />

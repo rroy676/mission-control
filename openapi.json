@@ -2765,6 +2765,36 @@
       }
     },
     "/api/chat/conversations": {
+      "post": {
+        "tags": [
+          "Chat"
+        ],
+        "summary": "Create or reuse a Hermes conversation",
+        "operationId": "createHermesConversation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["agent_name"],
+                "properties": {
+                  "agent_name": { "type": "string" },
+                  "agent_id": { "type": "integer" },
+                  "project_id": { "type": ["integer", "null"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Conversation created or reused" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "503": { "description": "Hermes runtime unavailable" }
+        }
+      },
       "get": {
         "tags": [
           "Chat"

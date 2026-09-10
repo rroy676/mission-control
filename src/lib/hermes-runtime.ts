@@ -64,7 +64,54 @@ export async function checkHermesHealth() {
   try { const { body } = await request('/health'); return { available: body?.status === 'ok', status: body?.status === 'ok' ? 'AVAILABLE' : 'DEGRADED', version: typeof body?.version === 'string' ? body.version : undefined } }
   catch (error) { return { available: false, status: error instanceof HermesRuntimeError && error.code === 'authentication' ? 'DEGRADED' : 'OFFLINE' } }
 }
-function sessionIdFor(tenantId: number, workspaceId: number, agentId: number, projectId: number | null) { return `mc_${tenantId}_${workspaceId}_${agentId}_${projectId || 'default'}` }
+export function hermesSessionIdFor(tenantId: number, workspaceId: number, agentId: number, projectId: number | null) { return `mc_${tenantId}_${workspaceId}_${agentId}_${projectId || 'default'}` }
+
+type HermesSessionInput = {
+  tenantId: number
+  workspaceId: number
+  agentId: number
+  projectId?: number | null
+  actorUser?: User
+}
+
+/**
+ * Create or reuse the server-owned Hermes session for one tenant/project
+ * scope. The caller must resolve project authorization before passing a
+ * project id here; the binding itself is still written with server-side
+ * tenant/workspace ids.
+ */
+export async function ensureHermesSession(input: HermesSessionInput) {
+  const db = getDatabase()
+  const projectId = input.projectId ?? null
+  const effectiveModel = input.actorUser
+    ? resolveEffectiveModel(requireProfileContext(input.actorUser), { agentId: input.agentId, purpose: 'general' })
+    : null
+  const existing = db.prepare('SELECT hermes_session_id FROM hermes_runtime_bindings WHERE tenant_id = ? AND workspace_id = ? AND agent_id = ? AND project_id IS ?').get(input.tenantId, input.workspaceId, input.agentId, projectId) as { hermes_session_id: string } | undefined
+  const sessionId = existing?.hermes_session_id || hermesSessionIdFor(input.tenantId, input.workspaceId, input.agentId, projectId)
+
+  if (!existing) {
+    const created = await request('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({
+        id: sessionId,
+        source: 'mission_control',
+        title: `Mission Control · ${input.actorUser?.display_name || input.actorUser?.username || 'CEO'}`,
+        ...(effectiveModel ? { provider: effectiveModel.provider_id, model: effectiveModel.model_id } : {}),
+      }),
+    }, [409])
+    if (created.response.status !== 201 && created.response.status !== 409) throw new HermesRuntimeError('session', 'Hermes session unavailable')
+    db.prepare('INSERT OR IGNORE INTO hermes_runtime_bindings (tenant_id, workspace_id, agent_id, project_id, hermes_session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, unixepoch(), unixepoch())').run(input.tenantId, input.workspaceId, input.agentId, projectId, sessionId)
+  }
+
+  if (effectiveModel) {
+    await request(`/api/sessions/${encodeURIComponent(sessionId)}/model`, {
+      method: 'POST',
+      body: JSON.stringify({ provider: effectiveModel.provider_id, model: effectiveModel.model_id }),
+    })
+  }
+
+  return { sessionId, projectId }
+}
 export function normalizeHermesResponse(body: any): { content: string | null; reasoning: string | null; finishReason: string | null; toolCallState: 'none' | 'structured' | 'reasoning_only' | 'empty' } {
   const message = body?.message && typeof body.message === 'object' ? body.message : body?.choices?.[0]?.message && typeof body.choices[0].message === 'object' ? body.choices[0].message : body
   let content = typeof message?.content === 'string' ? message.content.trim() : null
@@ -112,14 +159,8 @@ export function extractHermesAction(content: string): { action: string; paramete
 
 export async function sendHermesMessage(input: { tenantId: number; workspaceId: number; agentId: number; projectId?: number | null; message: string; systemMessage?: string; actor: string; actorUser?: User }) {
   const db = getDatabase(), projectId = input.projectId ?? null
+  const { sessionId } = await ensureHermesSession(input)
   const effectiveModel = input.actorUser ? resolveEffectiveModel(requireProfileContext(input.actorUser), { agentId: input.agentId, purpose: 'general' }) : null
-  const existing = db.prepare('SELECT hermes_session_id FROM hermes_runtime_bindings WHERE tenant_id = ? AND workspace_id = ? AND agent_id = ? AND project_id IS ?').get(input.tenantId, input.workspaceId, input.agentId, projectId) as { hermes_session_id: string } | undefined
-  const sessionId = existing?.hermes_session_id || sessionIdFor(input.tenantId, input.workspaceId, input.agentId, projectId)
-  if (!existing) {
-    const created = await request('/api/sessions', { method: 'POST', body: JSON.stringify({ id: sessionId, source: 'mission_control', title: `Mission Control · ${input.actor}`, ...(effectiveModel ? { provider: effectiveModel.provider_id, model: effectiveModel.model_id } : {}) }) }, [409])
-    if (created.response.status !== 201 && created.response.status !== 409) throw new HermesRuntimeError('session', 'Hermes session unavailable')
-    db.prepare('INSERT OR IGNORE INTO hermes_runtime_bindings (tenant_id, workspace_id, agent_id, project_id, hermes_session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, unixepoch(), unixepoch())').run(input.tenantId, input.workspaceId, input.agentId, projectId, sessionId)
-  }
   let system = input.systemMessage || ''
   if (input.projectId && input.actorUser) {
     const context = await buildHermesProjectContext(input.actorUser, input.projectId)
@@ -127,7 +168,6 @@ export async function sendHermesMessage(input: { tenantId: number; workspaceId: 
   }
   const body: Record<string, unknown> = { message: input.message }; if (system) body.system_message = system
   if (effectiveModel) { body.provider = effectiveModel.provider_id; body.model = effectiveModel.model_id; body.require_model_lock = true }
-  if (effectiveModel) await request(`/api/sessions/${encodeURIComponent(sessionId)}/model`, { method: 'POST', body: JSON.stringify({ provider: effectiveModel.provider_id, model: effectiveModel.model_id }) })
   const result = await request(`/api/sessions/${encodeURIComponent(sessionId)}/chat`, { method: 'POST', body: JSON.stringify(body) })
   let normalized = normalizeHermesResponse(result.body)
   let response = normalized.content

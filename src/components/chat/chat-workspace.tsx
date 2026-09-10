@@ -56,6 +56,7 @@ export function ChatWorkspace({ mode = 'embedded', onClose }: ChatWorkspaceProps
   const [sessionTranscriptLoading, setSessionTranscriptLoading] = useState(false)
   const [sessionTranscriptError, setSessionTranscriptError] = useState<string | null>(null)
   const [sessionReloadNonce, setSessionReloadNonce] = useState(0)
+  const [newChatRequest, setNewChatRequest] = useState(0)
 
   const isOverlay = mode === 'overlay'
   const selectedConversation = conversations.find((c) => c.id === activeConversation)
@@ -158,6 +159,9 @@ export function ChatWorkspace({ mode = 'embedded', onClose }: ChatWorkspaceProps
     if (!to && activeConversation.startsWith('agent_')) {
       to = activeConversation.replace('agent_', '')
     }
+    if (!to && selectedConversation?.kind === 'hermes') {
+      to = selectedConversation.agentName || 'hermes'
+    }
 
     // Create optimistic message with negative temp ID
     pendingIdRef.current -= 1
@@ -185,6 +189,7 @@ export function ChatWorkspace({ mode = 'embedded', onClose }: ChatWorkspaceProps
           to,
           content: cleanContent,
           conversation_id: activeConversation,
+          project_id: selectedConversation?.projectId ?? undefined,
           message_type: 'text',
           attachments,
           forward: true,
@@ -225,9 +230,66 @@ export function ChatWorkspace({ mode = 'embedded', onClose }: ChatWorkspaceProps
     setIsGenerating(false)
   }, [activeConversation])
 
-  const handleNewConversation = (agentName: string) => {
-    const convId = `agent_${agentName}`
-    setActiveConversation(convId)
+  const handleNewConversation = async (agentName: string, projectId: number | null) => {
+    const agent = agents.find((item) => item.name.toLowerCase() === agentName.toLowerCase())
+    if (String(agent?.runtime_type || '').toLowerCase() !== 'hermes' && agentName.toLowerCase() !== 'hermes') {
+      setActiveConversation(`agent_${agentName}`)
+      if (isMobile) setShowConversations(false)
+      return
+    }
+
+    let data: {
+      conversation?: {
+        id: string
+        session_id: string
+        agent_id: number
+        agent_name: string
+        project_id: number | null
+        project_name: string | null
+      }
+    }
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        data = await apiFetch<{
+          conversation?: {
+            id: string
+            session_id: string
+            agent_id: number
+            agent_name: string
+            project_id: number | null
+            project_name: string | null
+          }
+        }>('/api/chat/conversations', {
+          method: 'POST',
+          body: JSON.stringify({ agent_name: agentName, project_id: projectId }),
+        })
+        break
+      } catch (error) {
+        // A public tunnel can briefly return 502 before the request reaches the
+        // local service. Creation is safe to retry because the route only
+        // returns the deterministic server-authorized conversation identity.
+        if (!(error instanceof ApiError) || ![0, 502, 503, 504].includes(error.status) || attempt >= 2) throw error
+        await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)))
+      }
+    }
+    if (!data.conversation) throw new Error('Conversation was not created')
+
+    const conversation = data.conversation
+    const nextConversation: Conversation = {
+      id: conversation.id,
+      name: conversation.project_name ? `Hermes · ${conversation.project_name}` : 'Hermes · Company',
+      kind: 'hermes',
+      source: 'chat',
+      agentId: conversation.agent_id,
+      agentName: conversation.agent_name,
+      projectId: conversation.project_id,
+      projectName: conversation.project_name,
+      participants: [conversation.agent_name],
+      unreadCount: 0,
+      updatedAt: Math.floor(Date.now() / 1000),
+    }
+    setConversations([nextConversation, ...conversations.filter((item) => item.id !== nextConversation.id)])
+    setActiveConversation(nextConversation.id)
     if (isMobile) setShowConversations(false)
   }
 
@@ -406,7 +468,7 @@ export function ChatWorkspace({ mode = 'embedded', onClose }: ChatWorkspaceProps
         {/* Conversations sidebar */}
         {showConversations && !focusMode && (
           <div className={`${isMobile ? 'w-full' : 'w-56 border-r border-border'} shrink-0`}>
-            <ConversationList onNewConversation={handleNewConversation} />
+            <ConversationList onNewConversation={handleNewConversation} openNewChatSignal={newChatRequest} />
           </div>
         )}
 
@@ -512,7 +574,10 @@ export function ChatWorkspace({ mode = 'embedded', onClose }: ChatWorkspaceProps
                   />
                 ) : (
                   <>
-                    <MessageList />
+                    <MessageList onStartNewChat={() => {
+                      setShowConversations(true)
+                      setNewChatRequest((value) => value + 1)
+                    }} />
                     <ChatIndicators notifications={notifications} />
                     <ChatInput
                       onSend={handleSend}

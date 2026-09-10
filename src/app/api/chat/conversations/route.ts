@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getDatabase } from '@/lib/db'
 import { requireRole } from '@/lib/auth'
 import { logger } from '@/lib/logger'
+import { hermesSessionIdFor } from '@/lib/hermes-runtime'
+import { resolveHermesProject } from '@/lib/hermes-coo'
 
 /**
  * GET /api/chat/conversations - List conversations derived from messages
@@ -69,8 +71,28 @@ export async function GET(request: NextRequest) {
     const withLastMessage = conversations.map((conv) => {
       const lastMsg = lastMsgStmt.get(conv.conversation_id, workspaceId) as any;
 
+      const hermesSessionId = typeof conv.conversation_id === 'string' && conv.conversation_id.startsWith('hermes:')
+        ? conv.conversation_id.slice('hermes:'.length)
+        : null
+      const hermesBinding = hermesSessionId
+        ? db.prepare(`
+            SELECT b.project_id, a.name as agent_name, p.name as project_name
+            FROM hermes_runtime_bindings b
+            JOIN agents a ON a.id = b.agent_id AND a.workspace_id = b.workspace_id
+            LEFT JOIN projects p ON p.id = b.project_id AND p.workspace_id = b.workspace_id
+            WHERE b.tenant_id = ? AND b.workspace_id = ? AND b.hermes_session_id = ?
+            LIMIT 1
+          `).get(auth.user.tenant_id ?? 1, workspaceId, hermesSessionId) as { project_id: number | null; agent_name: string; project_name: string | null } | undefined
+        : undefined
+
       return {
         ...conv,
+        ...(hermesBinding ? {
+          kind: 'hermes',
+          agent_name: hermesBinding.agent_name,
+          project_id: hermesBinding.project_id,
+          project_name: hermesBinding.project_name,
+        } : {}),
         last_message: lastMsg
           ? {
               ...lastMsg,
@@ -99,5 +121,59 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     logger.error({ err: error }, 'GET /api/chat/conversations error')
     return NextResponse.json({ error: 'Failed to fetch conversations' }, { status: 500 })
+  }
+}
+
+/**
+ * POST /api/chat/conversations - Create or reuse a server-owned Hermes chat
+ * session for the authenticated tenant, agent, and optional project.
+ */
+export async function POST(request: NextRequest) {
+  const auth = requireRole(request, 'operator')
+  if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status })
+
+  try {
+    const body = await request.json()
+    const db = getDatabase()
+    const workspaceId = auth.user.workspace_id ?? 1
+    const tenantId = auth.user.tenant_id ?? 1
+    const agentId = Number(body?.agent_id)
+    const agentName = typeof body?.agent_name === 'string' ? body.agent_name.trim() : ''
+    const projectId = body?.project_id === null || body?.project_id === '' || body?.project_id === undefined
+      ? null
+      : Number(body.project_id)
+
+    if (!Number.isInteger(agentId) && !agentName) {
+      return NextResponse.json({ error: 'A Hermes agent is required' }, { status: 400 })
+    }
+    if (projectId !== null && !Number.isInteger(projectId)) {
+      return NextResponse.json({ error: 'Invalid project' }, { status: 400 })
+    }
+
+    const agent = Number.isInteger(agentId)
+      ? db.prepare('SELECT id, name, runtime_type FROM agents WHERE id = ? AND workspace_id = ? AND hidden = 0').get(agentId, workspaceId) as { id: number; name: string; runtime_type?: string | null } | undefined
+      : db.prepare('SELECT id, name, runtime_type FROM agents WHERE lower(name) = lower(?) AND workspace_id = ? AND hidden = 0').get(agentName, workspaceId) as { id: number; name: string; runtime_type?: string | null } | undefined
+
+    if (!agent || String(agent.runtime_type || '').toLowerCase() !== 'hermes') {
+      return NextResponse.json({ error: 'Selected agent is not an eligible Hermes runtime' }, { status: 400 })
+    }
+
+    const project = projectId === null ? null : resolveHermesProject(auth.user, projectId)
+    const existing = db.prepare('SELECT hermes_session_id FROM hermes_runtime_bindings WHERE tenant_id = ? AND workspace_id = ? AND agent_id = ? AND project_id IS ?').get(tenantId, workspaceId, agent.id, projectId) as { hermes_session_id: string } | undefined
+    const sessionId = existing?.hermes_session_id || hermesSessionIdFor(tenantId, workspaceId, agent.id, projectId)
+
+    return NextResponse.json({
+      conversation: {
+        id: `hermes:${sessionId}`,
+        session_id: sessionId,
+        agent_id: agent.id,
+        agent_name: agent.name,
+        project_id: project?.id ?? null,
+        project_name: project?.name ?? null,
+      },
+    }, { status: 201 })
+  } catch (error) {
+    logger.error({ err: error }, 'POST /api/chat/conversations error')
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to create conversation' }, { status: 400 })
   }
 }

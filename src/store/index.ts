@@ -141,6 +141,7 @@ export interface Agent {
   name: string
   role: string
   session_key?: string
+  runtime_type?: 'hermes' | 'openclaw' | 'claude' | 'codex' | 'custom' | null
   soul_content?: string
   working_memory?: string
   status: 'offline' | 'idle' | 'busy' | 'error'
@@ -239,6 +240,10 @@ export interface Conversation {
   name?: string
   kind?: string
   source?: 'chat' | 'session'
+  agentId?: number
+  agentName?: string
+  projectId?: number | null
+  projectName?: string | null
   session?: {
     prefKey?: string
     sessionId: string
