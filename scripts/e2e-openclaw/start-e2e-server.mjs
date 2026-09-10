@@ -249,6 +249,15 @@ if (!fs.existsSync(buildIdPath)) {
 
 const standaloneServerPath = findStandaloneServer(repoRoot)
 
+// The standalone server does not copy these client assets itself. Keep the
+// E2E process isolated from the host .env/startup wrapper while supplying the
+// same assets used by the normal standalone launcher.
+if (standaloneServerPath && fs.existsSync(standaloneServerPath)) {
+  const standaloneRoot = path.dirname(standaloneServerPath)
+  fs.cpSync(path.join(repoRoot, '.next', 'static'), path.join(standaloneRoot, '.next', 'static'), { recursive: true })
+  fs.cpSync(path.join(repoRoot, 'public'), path.join(standaloneRoot, 'public'), { recursive: true })
+}
+
 app = standaloneServerPath && fs.existsSync(standaloneServerPath)
   ? spawn('node', [standaloneServerPath], {
       cwd: repoRoot,

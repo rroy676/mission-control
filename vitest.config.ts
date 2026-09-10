@@ -13,6 +13,12 @@ export default defineConfig(async () => {
       globals: true,
       setupFiles: ['src/test/setup.ts'],
       include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+      // The integration suite starts an isolated Next process; keeping the
+      // default pool bounded prevents concurrent forks from starving that
+      // child process and hanging cleanup after a timeout.
+      pool: 'forks' as const,
+      maxWorkers: 1,
+      minWorkers: 1,
       coverage: {
         provider: 'v8' as const,
         include: ['src/lib/**/*.ts'],

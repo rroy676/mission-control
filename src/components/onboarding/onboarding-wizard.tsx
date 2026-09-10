@@ -223,7 +223,22 @@ export function OnboardingWizard() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [showOnboarding, skip])
 
-  if (!mounted || !showOnboarding || !state) return null
+  if (!mounted || !showOnboarding) return null
+
+  // Keep a visible surface above the app while the second state request is in
+  // flight. The page may already know onboarding is active, so returning null
+  // here would leave an invisible modal blocking the application.
+  if (!state) {
+    return createPortal(
+      <div className="fixed inset-0 z-140 flex items-center justify-center bg-black/82 backdrop-blur-md" role="dialog" aria-modal="true" aria-label="Mission Control onboarding">
+        <div className="flex items-center gap-3 rounded-lg border border-border/50 bg-background px-5 py-4 shadow-2xl">
+          <Loader variant="inline" />
+          <span className="text-sm text-muted-foreground">Loading onboarding…</span>
+        </div>
+      </div>,
+      document.body,
+    )
+  }
 
   const totalSteps = STEPS.length
   const isGateway = dashboardMode === 'full' || gatewayAvailable

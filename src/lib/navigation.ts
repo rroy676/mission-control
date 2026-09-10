@@ -1,7 +1,7 @@
 'use client'
 
 import { useRouter, usePathname } from 'next/navigation'
-import { startTransition, useCallback, useEffect } from 'react'
+import { useCallback, useEffect } from 'react'
 import { startNavigationTiming } from '@/lib/navigation-metrics'
 import { useMissionControl } from '@/store'
 
@@ -47,9 +47,10 @@ export function useNavigateToPanel() {
     if (panel === 'chat' || panel === 'sessions') {
       setChatPanelOpen(false)
     }
-    startTransition(() => {
-      router.push(href, { scroll: false })
-    })
+    // Keep the URL as the source of truth. Updating Zustand above makes the
+    // click feel immediate; a direct push lets Next commit the route without
+    // a deferred transition leaving the pathname temporarily stale.
+    router.push(href, { scroll: false })
   }, [pathname, router, setActiveTab, setChatPanelOpen])
 }
 

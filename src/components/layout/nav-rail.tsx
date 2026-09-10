@@ -4,7 +4,7 @@ import Image from 'next/image'
 import { useState, useEffect } from 'react'
 import { useTranslations } from 'next-intl'
 import { useMissionControl } from '@/store'
-import { useNavigateToPanel, usePrefetchPanel } from '@/lib/navigation'
+import { panelHref, useNavigateToPanel, usePrefetchPanel } from '@/lib/navigation'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { APP_VERSION } from '@/lib/version'
@@ -504,11 +504,10 @@ function NavButton({ item, active, expanded, onClick, onPrefetch, nested }: {
   if (expanded) {
     return (
       <Button
+        asChild
         variant="ghost"
-        onClick={onClick}
         onMouseEnter={onPrefetch}
         onFocus={onPrefetch}
-        aria-current={active ? 'page' : undefined}
         className={`w-full flex items-center gap-2 px-2 h-auto rounded-lg text-left justify-start relative ${
           nested ? 'py-1' : 'py-1.5'
         } ${
@@ -517,39 +516,45 @@ function NavButton({ item, active, expanded, onClick, onPrefetch, nested }: {
             : ''
         }`}
       >
-        {active && (
-          <span className="absolute left-0 w-0.5 h-5 bg-void-cyan rounded-r glow-cyan" />
-        )}
-        <div className={`shrink-0 ${nested ? 'w-4 h-4' : 'w-5 h-5'}`}>{item.icon}</div>
-        <span className={`truncate ${nested ? 'text-xs' : 'text-sm'}`}>{item.label}</span>
+        <a
+          href={panelHref(item.id)}
+          onClick={onClick}
+          aria-current={active ? 'page' : undefined}
+        >
+          {active && (
+            <span className="absolute left-0 w-0.5 h-5 bg-void-cyan rounded-r glow-cyan" />
+          )}
+          <div className={`shrink-0 ${nested ? 'w-4 h-4' : 'w-5 h-5'}`}>{item.icon}</div>
+          <span className={`truncate ${nested ? 'text-xs' : 'text-sm'}`}>{item.label}</span>
+        </a>
       </Button>
     )
   }
 
   return (
     <Button
+      asChild
       variant="ghost"
       size="icon-lg"
-      onClick={onClick}
       onMouseEnter={onPrefetch}
       onFocus={onPrefetch}
-      title={item.label}
-      aria-current={active ? 'page' : undefined}
       className={`rounded-lg group relative ${
         active
           ? 'bg-primary/15 text-primary hover:bg-primary/20'
           : ''
       }`}
     >
-      <div className="w-5 h-5">{item.icon}</div>
-      {/* Tooltip */}
-      <span className="absolute left-full ml-2 px-2 py-1 text-xs font-medium bg-popover text-popover-foreground border border-border rounded-md opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 transition-opacity">
-        {item.label}
-      </span>
-      {/* Active indicator */}
-      {active && (
-        <span className="absolute left-0 w-0.5 h-5 bg-primary rounded-r" />
-      )}
+      <a href={panelHref(item.id)} onClick={onClick} title={item.label} aria-current={active ? 'page' : undefined}>
+        <div className="w-5 h-5">{item.icon}</div>
+        {/* Tooltip */}
+        <span className="absolute left-full ml-2 px-2 py-1 text-xs font-medium bg-popover text-popover-foreground border border-border rounded-md opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 transition-opacity">
+          {item.label}
+        </span>
+        {/* Active indicator */}
+        {active && (
+          <span className="absolute left-0 w-0.5 h-5 bg-primary rounded-r" />
+        )}
+      </a>
     </Button>
   )
 }

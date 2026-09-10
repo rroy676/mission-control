@@ -372,11 +372,8 @@ export default function Home() {
         connectWithEnvFallback(null)
       })
 
-    // Check onboarding state.
-    // Original mapped non-ok → data=null → getOnboardingSessionDecision with all-false
-    // flags → shouldOpen:false (no-op) → markStep('config'). apiFetch throws on non-ok
-    // instead, hitting the .catch that also marks 'config' — same net effect (onboarding
-    // stays closed, boot step completes).
+    // Check onboarding state. A completed or skipped server state is dismissed;
+    // replay is only initiated by the explicit reset control in Settings.
     apiFetch<{ isAdmin?: boolean; showOnboarding?: boolean; completed?: boolean; skipped?: boolean }>('/api/onboarding')
       .then(data => {
         const decision = getOnboardingSessionDecision({
@@ -441,7 +438,10 @@ export default function Home() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- boot once on mount, not on every pathname change
   }, [connect, router, setCurrentUser, setDashboardMode, setGatewayAvailable, setLocalSessionsAvailable, setCapabilitiesChecked, setSubscription, setUpdateAvailable, setShowOnboarding, setAgents, setSessions, setProjects, setInterfaceMode, setMemoryGraphAgents, setSkillsData])
 
-  if (!isClient || !bootComplete) {
+  // Keep the authenticated shell usable while background boot requests finish.
+  // Individual panels already lazy-load their data, and onboarding renders its
+  // own visible loading surface when it is explicitly active.
+  if (!isClient) {
     return <Loader variant="page" steps={isClient ? initSteps : undefined} />
   }
 
@@ -452,19 +452,17 @@ export default function Home() {
       </a>
 
       {/* Left: Icon rail navigation (hidden on mobile, shown as bottom bar instead) */}
-      {!showOnboarding && <NavRail />}
+      <NavRail />
 
       {/* Center: Header + Content */}
       <div className="flex-1 flex flex-col min-w-0">
-        {!showOnboarding && (
-          <>
-            <HeaderBar />
-            <LocalModeBanner />
-            <UpdateBanner />
-            <OpenClawUpdateBanner />
-            <OpenClawDoctorBanner />
-          </>
-        )}
+        <>
+          <HeaderBar />
+          <LocalModeBanner />
+          <UpdateBanner />
+          <OpenClawUpdateBanner />
+          <OpenClawDoctorBanner />
+        </>
         <main
           id="main-content"
           className={`flex-1 overflow-auto pb-16 md:pb-0 ${showOnboarding ? 'pointer-events-none select-none blur-[2px] opacity-30' : ''}`}
@@ -481,14 +479,14 @@ export default function Home() {
       </div>
 
       {/* Right: Live feed (hidden on mobile) */}
-      {!showOnboarding && liveFeedOpen && (
+      {liveFeedOpen && (
         <div className="hidden lg:flex h-full">
           <LiveFeed />
         </div>
       )}
 
       {/* Floating button to reopen LiveFeed when closed */}
-      {!showOnboarding && !liveFeedOpen && (
+      {!liveFeedOpen && (
         <button
           onClick={toggleLiveFeed}
           className="hidden lg:flex fixed right-0 top-1/2 -translate-y-1/2 z-30 w-6 h-12 items-center justify-center bg-card border border-r-0 border-border rounded-l-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-all duration-200"
@@ -501,13 +499,13 @@ export default function Home() {
       )}
 
       {/* Chat panel overlay */}
-      {!showOnboarding && <ChatPanel />}
+      <ChatPanel />
 
       {/* Global exec approval overlay (shown regardless of active panel) */}
-      {!showOnboarding && <ExecApprovalOverlay />}
+      <ExecApprovalOverlay />
 
       {/* Global Project Manager Modal */}
-      {!showOnboarding && showProjectManagerModal && (
+      {showProjectManagerModal && (
         <ProjectManagerModal
           onClose={() => setShowProjectManagerModal(false)}
           onChanged={async () => { await fetchProjects() }}

@@ -12,6 +12,8 @@ export default defineConfig({
   reporter: [['list']],
   use: {
     baseURL: process.env.E2E_BASE_URL || 'http://127.0.0.1:3005',
+    ...(process.env.E2E_HOST_HEADER ? { extraHTTPHeaders: { Host: process.env.E2E_HOST_HEADER } } : {}),
+    ...(process.env.E2E_HOST_RESOLVER ? { launchOptions: { args: [`--host-resolver-rules=MAP ${process.env.E2E_HOST_RESOLVER}`] } } : {}),
     trace: 'retain-on-failure'
   },
   projects: [
