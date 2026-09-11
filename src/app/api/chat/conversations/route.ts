@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getDatabase } from '@/lib/db'
 import { requireRole } from '@/lib/auth'
 import { logger } from '@/lib/logger'
-import { hermesSessionIdFor } from '@/lib/hermes-runtime'
+import { newHermesSessionId } from '@/lib/hermes-runtime'
 import { resolveHermesProject } from '@/lib/hermes-coo'
 
 /**
@@ -159,8 +159,8 @@ export async function POST(request: NextRequest) {
     }
 
     const project = projectId === null ? null : resolveHermesProject(auth.user, projectId)
-    const existing = db.prepare('SELECT hermes_session_id FROM hermes_runtime_bindings WHERE tenant_id = ? AND workspace_id = ? AND agent_id = ? AND project_id IS ?').get(tenantId, workspaceId, agent.id, projectId) as { hermes_session_id: string } | undefined
-    const sessionId = existing?.hermes_session_id || hermesSessionIdFor(tenantId, workspaceId, agent.id, projectId)
+    const sessionId = newHermesSessionId(tenantId, workspaceId, agent.id, projectId)
+    db.prepare('INSERT INTO hermes_runtime_bindings (tenant_id, workspace_id, agent_id, project_id, hermes_session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, unixepoch(), unixepoch())').run(tenantId, workspaceId, agent.id, projectId, sessionId)
 
     return NextResponse.json({
       conversation: {

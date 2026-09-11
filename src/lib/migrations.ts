@@ -1893,6 +1893,28 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_hermes_interactions_scope ON hermes_interactions(tenant_id, workspace_id, created_at DESC);
       `)
     }
+  },
+  {
+    id: '063_hermes_chat_session_bindings',
+    up(db) {
+      // A project scope is an authorization boundary, not a conversation
+      // identity. Keeping one row per project caused every "New Chat" to
+      // reuse a potentially bloated or poisoned Hermes transcript.
+      db.exec(`
+        ALTER TABLE hermes_runtime_bindings RENAME TO hermes_runtime_bindings_legacy;
+        CREATE TABLE hermes_runtime_bindings (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, workspace_id INTEGER NOT NULL,
+          agent_id INTEGER NOT NULL, project_id INTEGER, hermes_session_id TEXT NOT NULL,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()), updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        INSERT INTO hermes_runtime_bindings (id, tenant_id, workspace_id, agent_id, project_id, hermes_session_id, created_at, updated_at)
+          SELECT id, tenant_id, workspace_id, agent_id, project_id, hermes_session_id, created_at, updated_at
+          FROM hermes_runtime_bindings_legacy;
+        DROP TABLE hermes_runtime_bindings_legacy;
+        CREATE UNIQUE INDEX idx_hermes_bindings_session ON hermes_runtime_bindings(tenant_id, workspace_id, hermes_session_id);
+        CREATE INDEX idx_hermes_bindings_scope ON hermes_runtime_bindings(tenant_id, workspace_id, agent_id, project_id);
+      `)
+    }
   }
 ]
 

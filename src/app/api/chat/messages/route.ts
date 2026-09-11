@@ -475,6 +475,7 @@ export async function POST(request: NextRequest) {
               workspaceId: hermesBinding.workspaceId,
               agentId: hermesBinding.agentId,
               projectId: hermesBinding.projectId,
+              sessionId: hermesBinding.sessionId,
               message: content,
               actor: from,
               actorUser: auth.user,
