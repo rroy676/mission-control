@@ -66,6 +66,8 @@ export function createHermesTask(user: User, binding: HermesBinding, input: z.in
   if (binding.tenantId !== user.tenant_id || binding.workspaceId !== user.workspace_id) throw new Error('Hermes binding is outside the active tenant/workspace')
   const db = getDatabase()
   resolveHermesProject(user, binding.projectId)
+  const existingTitle = db.prepare("SELECT id, title, description, status, priority, project_id, assigned_to, created_by, created_at, updated_at FROM tasks WHERE workspace_id = ? AND project_id = ? AND title = ? AND json_extract(metadata, '$.source') = 'hermes' LIMIT 1").get(binding.workspaceId, binding.projectId, input.title)
+  if (existingTitle) return { ...(existingTitle as Record<string, unknown>), idempotent: true }
   if (idempotencyKey) {
     const existing = db.prepare("SELECT id, title, description, status, priority, project_id, assigned_to, created_by, created_at, updated_at FROM tasks WHERE workspace_id = ? AND json_extract(metadata, '$.hermes_idempotency_key') = ? LIMIT 1").get(binding.workspaceId, idempotencyKey)
     if (existing) return { ...(existing as Record<string, unknown>), idempotent: true }

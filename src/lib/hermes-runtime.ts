@@ -142,17 +142,20 @@ export function normalizeHermesResponse(body: any): { content: string | null; re
 export function extractHermesAction(content: string): { action: string; parameters: Record<string, unknown> } | null {
   const match = content.match(/<mc_action>\s*([\s\S]*?)\s*<\/mc_action>/i) || content.match(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/i)
   if (match) try {
-    const parsed = JSON.parse(match[1]) as { name?: string; action?: string; arguments?: Record<string, unknown> } & Record<string, unknown>
-    if (!parsed.name || !['CREATE_TASK', 'SAVE_WORKING_MEMORY', 'REQUEST_CEO_APPROVAL'].includes(parsed.name)) return null
+    const parsed = JSON.parse(match[1]) as { name?: string; action?: string; arguments?: Record<string, unknown>; parameters?: Record<string, unknown> } & Record<string, unknown>
+    const actionName = typeof parsed.name === 'string' ? parsed.name : parsed.action
+    if (!actionName || !['CREATE_TASK', 'SAVE_WORKING_MEMORY', 'REQUEST_CEO_APPROVAL'].includes(actionName)) return null
     const rawParameters = parsed.arguments && typeof parsed.arguments === 'object'
       ? parsed.arguments
-      : Object.fromEntries(Object.entries(parsed).filter(([key]) => !['name', 'action', 'arguments'].includes(key)))
+      : parsed.parameters && typeof parsed.parameters === 'object'
+        ? parsed.parameters
+        : Object.fromEntries(Object.entries(parsed).filter(([key]) => !['name', 'action', 'arguments', 'parameters'].includes(key)))
     const parameters = { ...rawParameters }
-    if (parsed.name === 'CREATE_TASK') {
+    if (actionName === 'CREATE_TASK') {
       if (typeof parameters.objective !== 'string' && typeof parameters.description === 'string') parameters.objective = parameters.description
       for (const key of ['description', 'status', 'task_type', 'project_id', 'tenant_id', 'workspace_id', 'session_id', 'id']) delete parameters[key]
     }
-    return { action: parsed.name, parameters }
+    return { action: actionName, parameters }
   } catch { return null }
   const dsml = content.match(/<｜DSML｜tool_call>([\s\S]*?)<\/?｜DSML｜tool_call>/i)
   if (!dsml) return null
@@ -190,8 +193,12 @@ export async function sendHermesMessage(input: { tenantId: number; workspaceId: 
   let normalized = normalizeHermesResponse(result.body)
   let response = normalized.content
   if (!response) throw new HermesRuntimeError('invalid_response', normalized.toolCallState === 'reasoning_only' ? 'Hermes returned reasoning without a final response' : 'Hermes returned an empty response', 502)
-  const effectiveSessionId = typeof result.body?.session_id === 'string' ? result.body.session_id : sessionId
-  db.prepare('UPDATE hermes_runtime_bindings SET hermes_session_id = ?, updated_at = unixepoch() WHERE tenant_id = ? AND workspace_id = ? AND hermes_session_id = ?').run(effectiveSessionId, input.tenantId, input.workspaceId, sessionId)
+  // Hermes may return its canonical/internal session id (for example the
+  // project base id) even when the request was sent to the server-owned,
+  // conversation-specific id.  The latter is the Mission Control binding
+  // authority; replacing it makes the next message miss its binding and fall
+  // into the generic legacy delivery path.
+  const effectiveSessionId = sessionId
   const actorUser = input.actorUser
   const action = actorUser && input.projectId ? extractHermesAction(response) : null
   let actionResult: unknown = null

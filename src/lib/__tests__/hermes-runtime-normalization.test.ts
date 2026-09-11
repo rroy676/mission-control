@@ -19,6 +19,10 @@ describe('Hermes response normalization', () => {
     expect(extractHermesAction('<tool_call>{"name":"SAVE_WORKING_MEMORY","arguments":{"title":"T","content":"C","memory_type":"operational_note"}}</tool_call>')).toEqual({ action: 'SAVE_WORKING_MEMORY', parameters: { title: 'T', content: 'C', memory_type: 'operational_note' } })
   })
 
+  it('accepts the action/parameters envelope emitted by Hermes', () => {
+    expect(extractHermesAction('<mc_action>{"action":"CREATE_TASK","parameters":{"title":"T","description":"D"}}</mc_action>')).toEqual({ action: 'CREATE_TASK', parameters: { title: 'T', objective: 'D' } })
+  })
+
   it('normalizes Hermes DSML action output', () => {
     const dsml = '<｜DSML｜tool_call>\n<｜DSML｜parameter name="title" string="true">COO acceptance disposable</｜DSML｜parameter>\n<｜DSML｜parameter name="priority" string="true">low</｜DSML｜parameter>\n<｜DSML｜parameter name="action" string="true">CREATE_TASK</｜DSML｜parameter>\n<｜DSML｜tool_call>'
     expect(extractHermesAction(dsml)).toEqual({ action: 'CREATE_TASK', parameters: { title: 'COO acceptance disposable', priority: 'low' } })
