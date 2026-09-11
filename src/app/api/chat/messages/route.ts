@@ -9,7 +9,7 @@ import { scanForInjection, sanitizeForPrompt } from '@/lib/injection-guard'
 import { callOpenClawGateway } from '@/lib/openclaw-gateway'
 import { resolveCoordinatorDeliveryTarget } from '@/lib/coordinator-routing'
 import { getWorkspaceIsolation } from '@/lib/workspace-isolation'
-import { recordHermesInteraction, sendHermesMessage } from '@/lib/hermes-runtime'
+import { HermesRuntimeError, recordHermesInteraction, sendHermesMessage } from '@/lib/hermes-runtime'
 
 type ForwardInfo = {
   attempted: boolean
@@ -500,7 +500,9 @@ export async function POST(request: NextRequest) {
           } catch (err) {
             forwardInfo.reason = 'hermes_send_failed'
             logger.error({ err }, 'Failed to send message through Hermes runtime')
-            createChatReply(db, workspaceId, conversation_id, agent.name, from, 'Hermes could not complete that message. Please retry.', 'status', {
+            createChatReply(db, workspaceId, conversation_id, agent.name, from, err instanceof HermesRuntimeError && err.message.startsWith('Mission Control rejected')
+              ? `Hermes received a bounded Mission Control result, but the requested action was not completed: ${err.message}. No action was executed.`
+              : 'Hermes could not complete that message. Please retry.', 'status', {
               runtime: 'hermes',
               project_id: hermesBinding.projectId,
               status: 'error',

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractHermesAction, normalizeHermesResponse } from '@/lib/hermes-runtime'
+import { extractHermesAction, extractHermesActions, normalizeHermesResponse } from '@/lib/hermes-runtime'
 
 describe('Hermes response normalization', () => {
   it('classifies reasoning-only responses as incomplete', () => {
@@ -35,5 +35,12 @@ describe('Hermes response normalization', () => {
 
   it('keeps task project binding server-owned while mapping provider aliases', () => {
     expect(extractHermesAction('<｜DSML｜tool_call><｜DSML｜parameter name="name" string="true">CREATE_TASK</｜DSML｜parameter><｜DSML｜parameter name="arguments" string="true">{"title":"T","description":"D","project_id":999,"status":"pending","task_type":"test"}</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_call>')).toEqual({ action: 'CREATE_TASK', parameters: { title: 'T', objective: 'D' } })
+  })
+
+  it('extracts multiple approved envelopes without accepting provider-owned scope fields', () => {
+    expect(extractHermesActions('<mc_action>{"action":"CREATE_TASK","parameters":{"title":"A","objective":"OA","project_id":7}}</mc_action>\n<mc_action>{"action":"CREATE_TASK","parameters":{"title":"B","objective":"OB","tenant_id":99}}</mc_action>')).toEqual([
+      { action: 'CREATE_TASK', parameters: { title: 'A', objective: 'OA' } },
+      { action: 'CREATE_TASK', parameters: { title: 'B', objective: 'OB' } },
+    ])
   })
 })

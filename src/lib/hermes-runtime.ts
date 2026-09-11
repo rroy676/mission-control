@@ -12,6 +12,15 @@ export type HermesErrorCode = 'not_configured' | 'unavailable' | 'authentication
 export class HermesRuntimeError extends Error {
   constructor(public readonly code: HermesErrorCode, message: string, public readonly status = 503) { super(message); this.name = 'HermesRuntimeError' }
 }
+export class HermesStructuredActionError extends HermesRuntimeError {
+  constructor(
+    public readonly action: { action: string; parameters: Record<string, unknown> },
+    public readonly rejection: { status: number; reason: string; body?: unknown },
+  ) {
+    super('unavailable', `Mission Control rejected ${action.action}: ${rejection.reason}`, rejection.status >= 500 ? 503 : 403)
+    this.name = 'HermesStructuredActionError'
+  }
+}
 function baseUrl() { return (process.env.MC_HERMES_API_URL || 'http://127.0.0.1:8642').replace(/\/$/, '') }
 function apiKey() { return process.env.MC_HERMES_API_KEY || process.env.API_SERVER_KEY || '' }
 function missionControlBaseUrl() { return (process.env.MC_INTERNAL_BASE_URL || `http://${process.env.HOSTNAME || '172.20.0.1'}:${process.env.PORT || '3000'}`).replace(/\/$/, '') }
@@ -57,7 +66,11 @@ async function dispatchStructuredAction(action: { action: string; parameters: Re
       req.end(payload)
     })
   } catch { throw new HermesRuntimeError('unavailable', 'Mission Control structured action route unavailable') }
-  if ((response.statusCode || 500) < 200 || (response.statusCode || 500) >= 300) throw new HermesRuntimeError('unavailable', 'Mission Control structured action was rejected', (response.statusCode || 500) >= 500 ? 503 : 403)
+  if ((response.statusCode || 500) < 200 || (response.statusCode || 500) >= 300) {
+    const reason = typeof response.body?.error === 'string' ? response.body.error : 'Mission Control rejected the structured action'
+    logger.warn({ action: action.action, parameters: action.parameters, status: response.statusCode, reason }, 'Mission Control structured action rejected')
+    throw new HermesStructuredActionError(action, { status: response.statusCode || 500, reason, body: response.body })
+  }
   return { ...response.body, correlation_id: response.body?.correlation_id || correlationId, idempotency_key: idempotencyKey }
 }
 export async function checkHermesHealth() {
@@ -178,6 +191,18 @@ export function extractHermesAction(content: string): { action: string; paramete
   return ['CREATE_TASK', 'SAVE_WORKING_MEMORY', 'REQUEST_CEO_APPROVAL'].includes(action) ? { action, parameters } : null
 }
 
+export function extractHermesActions(content: string): Array<{ action: string; parameters: Record<string, unknown> }> {
+  const actions: Array<{ action: string; parameters: Record<string, unknown> }> = []
+  const tagPattern = /<(?:mc_action|tool_call)>\s*([\s\S]*?)\s*<\/(?:mc_action|tool_call)>/gi
+  for (const match of content.matchAll(tagPattern)) {
+    const action = extractHermesAction(match[0])
+    if (action) actions.push(action)
+  }
+  if (actions.length) return actions
+  const single = extractHermesAction(content)
+  return single ? [single] : []
+}
+
 export async function sendHermesMessage(input: { tenantId: number; workspaceId: number; agentId: number; projectId?: number | null; sessionId?: string; message: string; systemMessage?: string; actor: string; actorUser?: User }) {
   const db = getDatabase(), projectId = input.projectId ?? null
   const { sessionId } = await ensureHermesSession(input)
@@ -200,16 +225,25 @@ export async function sendHermesMessage(input: { tenantId: number; workspaceId: 
   // into the generic legacy delivery path.
   const effectiveSessionId = sessionId
   const actorUser = input.actorUser
-  const action = actorUser && input.projectId ? extractHermesAction(response) : null
+  const actions = actorUser && input.projectId ? extractHermesActions(response) : []
   let actionResult: unknown = null
-  if (action && actorUser && input.projectId) {
-    actionResult = await dispatchStructuredAction(action, effectiveSessionId)
-    const followup = await request(`/api/sessions/${encodeURIComponent(sessionId)}/chat`, { method: 'POST', body: JSON.stringify({ message: `<tool_response>${JSON.stringify({ action: action.action, result: actionResult })}</tool_response>`, system_message: 'Continue with a concise final answer. Do not emit another tool call.' }) }, [], PROJECT_CHAT_TIMEOUT_MS)
+  if (actions.length && actorUser && input.projectId) {
+    const results: unknown[] = []
+    for (const action of actions) {
+      try {
+        results.push(await dispatchStructuredAction(action, effectiveSessionId))
+      } catch (error) {
+        if (!(error instanceof HermesStructuredActionError)) throw error
+        results.push({ status: 'rejected', action: action.action, reason: error.rejection.reason, authorization: error.rejection.reason.toLowerCase().includes('approval') ? 'approval_required' : 'unauthorized_or_invalid' })
+      }
+    }
+    actionResult = results.length === 1 ? results[0] : results
+    const followup = await request(`/api/sessions/${encodeURIComponent(sessionId)}/chat`, { method: 'POST', body: JSON.stringify({ message: `<tool_response>${JSON.stringify({ results })}</tool_response>`, system_message: 'Continue with a concise final answer. Explain any rejected action clearly. Do not emit another tool call.' }) }, [], PROJECT_CHAT_TIMEOUT_MS)
     normalized = normalizeHermesResponse(followup.body)
     if (!normalized.content) throw new HermesRuntimeError('invalid_response', normalized.toolCallState === 'reasoning_only' ? 'Hermes returned reasoning without a final response after the action' : 'Hermes returned an empty follow-up response after the action', 502)
     response = normalized.content
   }
-  return { sessionId: effectiveSessionId, response, action: action?.action || null, actionResult }
+  return { sessionId: effectiveSessionId, response, action: actions[0]?.action || null, actionResult }
 }
 export function recordHermesInteraction(input: { workspaceId: number; tenantId: number; agentId: number; actor: string; message: string; response: string; sessionId: string; projectId?: number | null }) {
   const db = getDatabase(), detail = { runtime: 'hermes', tenant_id: input.tenantId, project_id: input.projectId ?? null, session_id: input.sessionId, message_length: input.message.length, response_length: input.response.length }

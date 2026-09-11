@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireRole } from '@/lib/auth'
+import { db_helpers, getDatabase, logAuditEvent } from '@/lib/db'
 import { bindingForSession, createHermesTask, hermesCreateTaskSchema, saveHermesMemory } from '@/lib/hermes-coo'
 import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
@@ -9,8 +10,10 @@ const requestSchema = z.object({ action: z.enum(['CREATE_TASK', 'SAVE_WORKING_ME
 export async function POST(request: NextRequest) {
   const auth = requireRole(request, 'operator')
   if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status })
+  let rejectedBody: { action?: string; session_id?: string } = {}
   try {
     const body = requestSchema.parse(await request.json())
+    rejectedBody = body
     const correlationId = request.headers.get('x-request-id') || randomUUID()
     const binding = bindingForSession(auth.user, body.session_id)
     let result: unknown
@@ -19,6 +22,13 @@ export async function POST(request: NextRequest) {
     else result = { status: 'approval_required', message: 'CEO approval is required; no approval was granted.' }
     return NextResponse.json({ ok: true, action: body.action, action_id: randomUUID(), correlation_id: correlationId, result })
   } catch (error) {
-    return NextResponse.json({ error: error instanceof z.ZodError ? 'Invalid structured action' : error instanceof Error ? error.message : 'Action failed' }, { status: 403 })
+    const reason = error instanceof z.ZodError ? 'Invalid structured action parameters' : error instanceof Error ? error.message : 'Action failed'
+    try {
+      const db = getDatabase()
+      const actor = 'Hermes'
+      db_helpers.logActivity('hermes_action_rejected', 'agent', 0, actor, `Hermes action rejected: ${rejectedBody.action || 'unknown'}`, { action: rejectedBody.action || null, session_id: rejectedBody.session_id || null, reason }, auth.user.workspace_id)
+      logAuditEvent({ action: 'hermes.action_rejected', actor, target_type: 'structured_action', detail: { action: rejectedBody.action || null, session_id: rejectedBody.session_id || null, reason, classification: reason.toLowerCase().includes('approval') ? 'approval_required' : 'unauthorized_or_invalid' }, workspace_id: auth.user.workspace_id, tenant_id: auth.user.tenant_id })
+    } catch {}
+    return NextResponse.json({ error: reason, classification: reason.toLowerCase().includes('approval') ? 'approval_required' : 'unauthorized_or_invalid' }, { status: 403 })
   }
 }

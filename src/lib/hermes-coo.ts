@@ -57,9 +57,26 @@ export async function buildHermesProjectContext(user: User, projectId: number) {
 
 export function bindingForSession(user: User, sessionId: string): HermesBinding {
   const db = getDatabase()
-  const row = db.prepare(`SELECT tenant_id as tenantId, workspace_id as workspaceId, agent_id as agentId, project_id as projectId, hermes_session_id as sessionId FROM hermes_runtime_bindings WHERE tenant_id = ? AND workspace_id = ? AND hermes_session_id = ? AND project_id IS NOT NULL`).get(user.tenant_id, user.workspace_id, sessionId) as HermesBinding | undefined
-  if (!row || row.tenantId !== user.tenant_id || row.workspaceId !== user.workspace_id || !row.projectId) throw new Error('Hermes session is not bound to an authorized project')
-  return row
+  const normalizedSessionId = sessionId.startsWith('hermes:') ? sessionId.slice('hermes:'.length) : sessionId
+  const bindingQuery = `SELECT tenant_id as tenantId, workspace_id as workspaceId, agent_id as agentId, project_id as projectId, hermes_session_id as sessionId FROM hermes_runtime_bindings WHERE tenant_id = ? AND workspace_id = ? AND hermes_session_id = ? AND project_id IS NOT NULL`
+  const row = db.prepare(bindingQuery).get(user.tenant_id, user.workspace_id, normalizedSessionId) as HermesBinding | undefined
+  if (row) return row
+
+  // Hermes may report the canonical/base id for a conversation-specific
+  // session. Resolve that alias only through the existing persisted binding;
+  // never derive tenant, workspace, agent, or project authority from the id.
+  const canonicalMatch = normalizedSessionId.match(/^(mc_\d+_\d+_\d+_(?:default|\d+))$/i)
+  const canonicalId = canonicalMatch?.[1]
+  const aliases = canonicalId
+    ? db.prepare(`
+        SELECT tenant_id as tenantId, workspace_id as workspaceId, agent_id as agentId, project_id as projectId, hermes_session_id as sessionId
+        FROM hermes_runtime_bindings
+        WHERE tenant_id = ? AND workspace_id = ? AND hermes_session_id LIKE ? AND project_id IS NOT NULL
+        ORDER BY id ASC
+      `).all(user.tenant_id, user.workspace_id, `${canonicalId}_%`) as HermesBinding[]
+    : []
+  if (aliases.length === 1) return aliases[0]
+  throw new Error('Hermes session is not bound to an authorized project')
 }
 
 export function createHermesTask(user: User, binding: HermesBinding, input: z.infer<typeof hermesCreateTaskSchema>, idempotencyKey?: string) {
