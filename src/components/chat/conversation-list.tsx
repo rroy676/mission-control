@@ -7,6 +7,7 @@ import { apiFetch, ApiError } from '@/lib/api-client'
 import { createClientLogger } from '@/lib/client-logger'
 import { Button } from '@/components/ui/button'
 import { SessionKindAvatar, SessionKindPill } from './session-kind-brand'
+import { normalizePersistedHermesConversations } from '@/lib/chat-conversations'
 
 const log = createClientLogger('ConversationList')
 
@@ -139,6 +140,7 @@ export function ConversationList({ onNewConversation, openNewChatSignal = 0 }: C
     setSessionAttention,
     addSplitPane,
     agents,
+    currentUser,
   } = useMissionControl()
   const [search, setSearch] = useState('')
   const [initialLoading, setInitialLoading] = useState(conversations.length === 0)
@@ -150,6 +152,7 @@ export function ConversationList({ onNewConversation, openNewChatSignal = 0 }: C
   const [projectsError, setProjectsError] = useState<string | null>(null)
   const [newChatBusy, setNewChatBusy] = useState(false)
   const [newChatError, setNewChatError] = useState<string | null>(null)
+  const [conversationLoadError, setConversationLoadError] = useState<string | null>(null)
 
   // Context menu state
   const [ctxMenu, setCtxMenu] = useState<{ convId: string; x: number; y: number } | null>(null)
@@ -300,6 +303,11 @@ export function ConversationList({ onNewConversation, openNewChatSignal = 0 }: C
   }
 
   const loadConversations = useCallback(async () => {
+    // The root page hydrates the authenticated user asynchronously. Do not
+    // let an unauthenticated first render turn a persisted Hermes list into
+    // an apparently empty sidebar.
+    if (!currentUser) return
+
     try {
       // apiFetch throws on non-OK / network errors. The originals used
       // `.ok ? parse : default` for INDEPENDENT graceful degradation, so each
@@ -312,9 +320,7 @@ export function ConversationList({ onNewConversation, openNewChatSignal = 0 }: C
         apiFetch<unknown>('/api/chat/session-prefs')
           .then((payload) => readSessionPrefs(payload))
           .catch(() => ({} as SessionPrefs)),
-        apiFetch<unknown>('/api/chat/conversations')
-          .then((payload) => payload)
-          .catch(() => null),
+        apiFetch<unknown>('/api/chat/conversations'),
       ])
 
       const providerSessions = sessionsData
@@ -377,52 +383,22 @@ export function ConversationList({ onNewConversation, openNewChatSignal = 0 }: C
           }
         })
 
-      const chatRecord = asRecord(chatData)
-      const chatRows = Array.isArray(chatRecord?.conversations) ? chatRecord.conversations : []
-      const directConversations = chatRows.flatMap((value) => {
-        const row = asRecord(value)
-        const id = readString(row?.conversation_id)
-        if (!id || !id.startsWith('hermes:')) return []
-        const projectId = readNumber(row?.project_id) ?? null
-        const agentName = readString(row?.agent_name) || 'hermes'
-        const projectName = readString(row?.project_name) || null
-        const last = asRecord(row?.last_message)
-        const createdAt = readNumber(row?.last_message_at) || Math.floor(Date.now() / 1000)
-        return [{
-          id,
-          name: projectName ? `Hermes · ${projectName}` : 'Hermes · Company',
-          kind: 'hermes',
-          source: 'chat' as const,
-          agentName,
-          projectId,
-          projectName,
-          participants: [agentName],
-          lastMessage: last && typeof last.id === 'number' ? {
-            id: last.id,
-            conversation_id: id,
-            from_agent: readString(last.from_agent) || agentName,
-            to_agent: readString(last.to_agent) || null,
-            content: readString(last.content) || '',
-            message_type: (readString(last.message_type) || 'text') as ChatMessage['message_type'],
-            created_at: readNumber(last.created_at) || createdAt,
-          } : undefined,
-          unreadCount: readNumber(row?.unread_count) || 0,
-          updatedAt: createdAt,
-        }]
-      })
+      const directConversations = normalizePersistedHermesConversations(chatData) as Conversation[]
 
       setConversations(
         [...directConversations, ...providerSessions]
           .sort((a: Conversation, b: Conversation) => b.updatedAt - a.updatedAt)
       )
+      setConversationLoadError(null)
       setInitialLoading(false)
     } catch (err) {
       log.error('Failed to load conversations:', err)
+      setConversationLoadError('Conversation history is temporarily unavailable. Retrying…')
       setInitialLoading(false)
     }
-  }, [setConversations])
+  }, [currentUser, setConversations])
 
-  useSmartPoll(loadConversations, 30000, { pauseWhenSseConnected: true })
+  useSmartPoll(loadConversations, 30000, { pauseWhenSseConnected: true, enabled: !!currentUser })
 
   const handleSelect = (convId: string) => {
     setActiveConversation(convId)
@@ -702,10 +678,17 @@ export function ConversationList({ onNewConversation, openNewChatSignal = 0 }: C
       <div className="flex-1 overflow-y-auto">
         {filteredConversations.length === 0 && agentRows.length === 0 ? (
           <div className="p-4 text-center text-xs text-muted-foreground/50">
-            {initialLoading ? (
+            {!currentUser || initialLoading ? (
               <div className="flex items-center justify-center gap-2">
                 <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
                 <span>Loading sessions...</span>
+              </div>
+            ) : conversationLoadError ? (
+              <div className="space-y-2">
+                <p>{conversationLoadError}</p>
+                <button type="button" className="text-primary hover:underline" onClick={() => void loadConversations()}>
+                  Retry
+                </button>
               </div>
             ) : (
               'No sessions or agents found'
