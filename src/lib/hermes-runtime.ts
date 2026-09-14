@@ -157,7 +157,7 @@ export function extractHermesAction(content: string): { action: string; paramete
   if (match) try {
     const parsed = JSON.parse(match[1]) as { name?: string; action?: string; arguments?: Record<string, unknown>; parameters?: Record<string, unknown> } & Record<string, unknown>
     const actionName = typeof parsed.name === 'string' ? parsed.name : parsed.action
-    if (!actionName || !['CREATE_TASK', 'SAVE_WORKING_MEMORY', 'REQUEST_CEO_APPROVAL'].includes(actionName)) return null
+    if (!actionName || !['CREATE_TASK', 'SAVE_WORKING_MEMORY', 'REQUEST_CEO_APPROVAL', 'UPDATE_TASK_RESULT'].includes(actionName)) return null
     const rawParameters = parsed.arguments && typeof parsed.arguments === 'object'
       ? parsed.arguments
       : parsed.parameters && typeof parsed.parameters === 'object'
@@ -167,6 +167,9 @@ export function extractHermesAction(content: string): { action: string; paramete
     if (actionName === 'CREATE_TASK') {
       if (typeof parameters.objective !== 'string' && typeof parameters.description === 'string') parameters.objective = parameters.description
       for (const key of ['description', 'status', 'task_type', 'project_id', 'tenant_id', 'workspace_id', 'session_id', 'id']) delete parameters[key]
+    }
+    if (actionName === 'UPDATE_TASK_RESULT') {
+      for (const key of ['tenant_id', 'workspace_id', 'project_id', 'session_id']) delete parameters[key]
     }
     return { action: actionName, parameters }
   } catch { return null }
@@ -188,7 +191,7 @@ export function extractHermesAction(content: string): { action: string; paramete
     delete parameters.task_type
     delete parameters.project_id
   }
-  return ['CREATE_TASK', 'SAVE_WORKING_MEMORY', 'REQUEST_CEO_APPROVAL'].includes(action) ? { action, parameters } : null
+  return ['CREATE_TASK', 'SAVE_WORKING_MEMORY', 'REQUEST_CEO_APPROVAL', 'UPDATE_TASK_RESULT'].includes(action) ? { action, parameters } : null
 }
 
 export function extractHermesActions(content: string): Array<{ action: string; parameters: Record<string, unknown> }> {
@@ -244,6 +247,83 @@ export async function sendHermesMessage(input: { tenantId: number; workspaceId: 
     response = normalized.content
   }
   return { sessionId: effectiveSessionId, response, action: actions[0]?.action || null, actionResult }
+}
+
+/**
+ * Server-owned background Hermes invocation. This deliberately does not use
+ * the generic task dispatcher or any CLI/PTY path. The caller supplies a
+ * server-resolved model and handles the already-bounded Mission Control
+ * actions through an in-process callback.
+ */
+export async function sendHermesBackgroundMessage(input: {
+  tenantId: number
+  workspaceId: number
+  agentId: number
+  projectId: number
+  sessionId?: string
+  message: string
+  systemMessage: string
+  provider: string
+  model: string
+  onAction: (action: { action: string; parameters: Record<string, unknown> }) => Promise<unknown>
+  onHeartbeat?: (activity: string) => void
+}) {
+  const { sessionId } = await ensureHermesSession({
+    tenantId: input.tenantId,
+    workspaceId: input.workspaceId,
+    agentId: input.agentId,
+    projectId: input.projectId,
+    sessionId: input.sessionId,
+  })
+  const body = {
+    message: input.message,
+    system_message: input.systemMessage,
+    provider: input.provider,
+    model: input.model,
+    require_model_lock: true,
+  }
+  input.onHeartbeat?.('Hermes reasoning request sent')
+  const result = await request(`/api/sessions/${encodeURIComponent(sessionId)}/chat`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  }, [], PROJECT_CHAT_TIMEOUT_MS)
+  let normalized = normalizeHermesResponse(result.body)
+  if (!normalized.content) throw new HermesRuntimeError('invalid_response', 'Hermes returned an empty background response', 502)
+  const firstUsage = result.body?.usage || result.body?.meta?.usage || {}
+  const actions = extractHermesActions(normalized.content)
+  const actionResults: unknown[] = []
+  for (const action of actions) {
+    input.onHeartbeat?.(`Executing bounded action ${action.action}`)
+    actionResults.push(await input.onAction(action))
+  }
+  if (actions.length) {
+    const followup = await request(`/api/sessions/${encodeURIComponent(sessionId)}/chat`, {
+      method: 'POST',
+      body: JSON.stringify({
+        message: `<tool_response>${JSON.stringify({ results: actionResults })}</tool_response>`,
+        system_message: 'Continue with a concise final result. Do not emit another action.',
+      }),
+    }, [], PROJECT_CHAT_TIMEOUT_MS)
+    normalized = normalizeHermesResponse(followup.body)
+    if (!normalized.content) throw new HermesRuntimeError('invalid_response', 'Hermes returned an empty background follow-up', 502)
+    const followupUsage = followup.body?.usage || followup.body?.meta?.usage || {}
+    return {
+      sessionId,
+      response: normalized.content,
+      actions,
+      actionResults,
+      inputTokens: Number(firstUsage.input_tokens ?? firstUsage.prompt_tokens ?? 0) + Number(followupUsage.input_tokens ?? followupUsage.prompt_tokens ?? 0),
+      outputTokens: Number(firstUsage.output_tokens ?? firstUsage.completion_tokens ?? 0) + Number(followupUsage.output_tokens ?? followupUsage.completion_tokens ?? 0),
+    }
+  }
+  return {
+    sessionId,
+    response: normalized.content,
+    actions,
+    actionResults,
+    inputTokens: Number(firstUsage.input_tokens ?? firstUsage.prompt_tokens ?? 0),
+    outputTokens: Number(firstUsage.output_tokens ?? firstUsage.completion_tokens ?? 0),
+  }
 }
 export function recordHermesInteraction(input: { workspaceId: number; tenantId: number; agentId: number; actor: string; message: string; response: string; sessionId: string; projectId?: number | null }) {
   const db = getDatabase(), detail = { runtime: 'hermes', tenant_id: input.tenantId, project_id: input.projectId ?? null, session_id: input.sessionId, message_length: input.message.length, response_length: input.response.length }

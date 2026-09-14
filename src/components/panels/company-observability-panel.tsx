@@ -36,6 +36,7 @@ export function CompanyObservabilityPanel() {
       {gates.map(([key, value]) => <div key={key} className="rounded border border-border bg-card p-4"><div className="text-xs uppercase text-muted-foreground">{key}</div><div className="mt-1 text-2xl font-semibold">{String(value)}</div></div>)}
     </div>
     <div className="grid gap-4 lg:grid-cols-2">
+      <Card title="Hermes COO"><Rows data={{ state: status.hermes_coo?.state, current_task: status.hermes_coo?.current?.task_id, current_project: status.hermes_coo?.current?.project_id, started_at: status.hermes_coo?.current?.started_at, last_heartbeat: status.hermes_coo?.current?.heartbeat_at, last_activity: status.hermes_coo?.current?.last_meaningful_activity, next_task: status.hermes_coo?.next?.title, completed_today: status.hermes_coo?.completed_today, blocked_tasks: status.hermes_coo?.blocked?.length || 0, approvals_waiting: status.hermes_coo?.approvals?.length || 0, provider: status.hermes_coo?.current?.provider_id, model: status.hermes_coo?.current?.model_id, input_tokens: status.hermes_coo?.current?.input_tokens, output_tokens: status.hermes_coo?.current?.output_tokens, cost_usd: status.hermes_coo?.current?.cost_usd, recent_outputs: status.hermes_coo?.recent_outputs?.length || 0 }} /></Card>
       <Card title="Company"><Rows data={status.company} /></Card>
       <Card title="Engineering"><Rows data={status.engineering} /></Card>
       <Card title="Product Operations"><Rows data={status.product_ops} /></Card>

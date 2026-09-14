@@ -1915,6 +1915,63 @@ const migrations: Migration[] = [
         CREATE INDEX idx_hermes_bindings_scope ON hermes_runtime_bindings(tenant_id, workspace_id, agent_id, project_id);
       `)
     }
+  },
+  {
+    id: '064_hermes_background_coo',
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS hermes_coo_runs (
+          run_id TEXT PRIMARY KEY,
+          tenant_id INTEGER NOT NULL,
+          workspace_id INTEGER NOT NULL,
+          project_id INTEGER NOT NULL,
+          task_id INTEGER NOT NULL,
+          agent_id INTEGER NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('QUEUED','RUNNING','WAITING_FOR_CEO','BLOCKED','SUCCEEDED','FAILED','CANCELLED','INTERRUPTED')),
+          started_at INTEGER,
+          heartbeat_at INTEGER,
+          completed_at INTEGER,
+          attempt INTEGER NOT NULL DEFAULT 1,
+          model_profile_id INTEGER,
+          provider_id TEXT,
+          model_id TEXT,
+          input_tokens INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0,
+          cost_usd REAL,
+          last_meaningful_activity TEXT,
+          stop_reason TEXT,
+          error_classification TEXT,
+          approval_id TEXT,
+          correlation_id TEXT NOT NULL UNIQUE,
+          action_count INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_hermes_coo_runs_scope ON hermes_coo_runs(tenant_id, workspace_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_hermes_coo_runs_active ON hermes_coo_runs(status, tenant_id, agent_id);
+        CREATE INDEX IF NOT EXISTS idx_hermes_coo_runs_task ON hermes_coo_runs(task_id, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS hermes_coo_approvals (
+          approval_id TEXT PRIMARY KEY,
+          tenant_id INTEGER NOT NULL,
+          workspace_id INTEGER NOT NULL,
+          project_id INTEGER NOT NULL,
+          task_id INTEGER NOT NULL,
+          run_id TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('PENDING','APPROVED','REJECTED','CANCELLED')) DEFAULT 'PENDING',
+          reason TEXT NOT NULL,
+          requested_action TEXT NOT NULL,
+          requested_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          decided_at INTEGER,
+          decided_by TEXT,
+          decision_note TEXT,
+          FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+          FOREIGN KEY (run_id) REFERENCES hermes_coo_runs(run_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_hermes_coo_approvals_pending ON hermes_coo_approvals(tenant_id, status, requested_at DESC);
+      `)
+    }
   }
 ]
 

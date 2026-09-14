@@ -11060,6 +11060,21 @@
         "responses": { "200": { "description": "Structured action result", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" } }
       }
     },
+    "/api/hermes/background": {
+      "get": {
+        "tags": ["Monitoring"],
+        "summary": "Get bounded Hermes background COO status",
+        "operationId": "getHermesBackgroundStatus",
+        "responses": { "200": { "description": "Hermes background status" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+      },
+      "post": {
+        "tags": ["Admin"],
+        "summary": "Decide a pending Hermes CEO approval",
+        "operationId": "decideHermesBackgroundApproval",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["approval_id", "decision"], "properties": { "approval_id": { "type": "string" }, "decision": { "type": "string", "enum": ["APPROVED", "REJECTED"] }, "note": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "Approval decided" }, "400": { "$ref": "#/components/responses/BadRequest" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
     "/api/hermes/events": {
       "post": {
         "tags": [

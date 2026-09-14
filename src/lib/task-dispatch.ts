@@ -1739,6 +1739,12 @@ export async function dispatchAssignedTasks(): Promise<{ ok: boolean; message: s
     WHERE t.status = 'assigned'
       AND w.isolation = 'shared'
       AND t.assigned_to IS NOT NULL
+      -- Explicitly eligible Hermes tasks belong to the dedicated bounded
+      -- background runner, never to the generic dispatcher.
+      AND NOT (
+        lower(a.runtime_type) = 'hermes'
+        AND json_extract(COALESCE(t.metadata, '{}'), '$.hermes_autonomous') = 1
+      )
     ORDER BY
       CASE t.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END ASC,
       t.created_at ASC

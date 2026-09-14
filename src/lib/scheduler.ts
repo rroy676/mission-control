@@ -14,6 +14,7 @@ import { dispatchAssignedTasks, runAegisReviews, requeueStaleTasks, autoRouteInb
 import { spawnRecurringTasks } from './recurring-tasks'
 import { resolveSharedRuntimeWorkspaceId } from './workspace-isolation'
 import { runScheduledTenantBackups, runScheduledRemoteRestoreTests } from './tenant-backups'
+import { runHermesBackgroundTick } from './hermes-background'
 
 const BACKUP_DIR = join(dirname(config.dbPath), 'backups')
 
@@ -416,6 +417,15 @@ export function initScheduler() {
     running: false,
   })
 
+  tasks.set('hermes_background_coo', {
+    name: 'Hermes Background COO',
+    intervalMs: TICK_MS,
+    lastRun: null,
+    nextRun: now + 15_000,
+    enabled: true,
+    running: false,
+  })
+
   tasks.set('aegis_review', {
     name: 'Aegis Quality Review',
     intervalMs: TICK_MS, // Every 60s — check for tasks awaiting review
@@ -477,11 +487,12 @@ async function tick() {
       : id === 'local_agent_sync' ? 'general.local_agent_sync'
       : id === 'gateway_agent_sync' ? 'general.gateway_agent_sync'
       : id === 'task_dispatch' ? 'general.task_dispatch'
+      : id === 'hermes_background_coo' ? 'general.hermes_background_coo'
       : id === 'aegis_review' ? 'general.aegis_review'
       : id === 'recurring_task_spawn' ? 'general.recurring_task_spawn'
       : id === 'stale_task_requeue' ? 'general.stale_task_requeue'
       : 'general.agent_heartbeat'
-    const defaultEnabled = id === 'agent_heartbeat' || id === 'webhook_retry' || id === 'claude_session_scan' || id === 'skill_sync' || id === 'local_agent_sync' || id === 'gateway_agent_sync' || id === 'task_dispatch' || id === 'aegis_review' || id === 'recurring_task_spawn' || id === 'stale_task_requeue'
+    const defaultEnabled = id === 'agent_heartbeat' || id === 'webhook_retry' || id === 'claude_session_scan' || id === 'skill_sync' || id === 'local_agent_sync' || id === 'gateway_agent_sync' || id === 'task_dispatch' || id === 'hermes_background_coo' || id === 'aegis_review' || id === 'recurring_task_spawn' || id === 'stale_task_requeue'
     if (!isSettingEnabled(settingKey, defaultEnabled)) continue
 
     task.running = true
@@ -505,6 +516,7 @@ async function tick() {
             const parts = [reconcileResult.message, routeResult.message, dispatchResult.message].filter(m => m && !m.includes('No ') && !m.includes('none completed'))
             return { ok: routeResult.ok && reconcileResult.ok && dispatchResult.ok, message: parts.join(' | ') || 'No tasks to reconcile, route, or dispatch' }
           })
+        : id === 'hermes_background_coo' ? await runHermesBackgroundTick()
         : id === 'aegis_review' ? await runAegisReviews()
         : id === 'recurring_task_spawn' ? await spawnRecurringTasks()
         : id === 'stale_task_requeue' ? await requeueStaleTasks()
@@ -543,11 +555,12 @@ export function getSchedulerStatus() {
       : id === 'local_agent_sync' ? 'general.local_agent_sync'
       : id === 'gateway_agent_sync' ? 'general.gateway_agent_sync'
       : id === 'task_dispatch' ? 'general.task_dispatch'
+      : id === 'hermes_background_coo' ? 'general.hermes_background_coo'
       : id === 'aegis_review' ? 'general.aegis_review'
       : id === 'recurring_task_spawn' ? 'general.recurring_task_spawn'
       : id === 'stale_task_requeue' ? 'general.stale_task_requeue'
       : 'general.agent_heartbeat'
-    const defaultEnabled = id === 'agent_heartbeat' || id === 'webhook_retry' || id === 'claude_session_scan' || id === 'skill_sync' || id === 'local_agent_sync' || id === 'gateway_agent_sync' || id === 'task_dispatch' || id === 'aegis_review' || id === 'recurring_task_spawn' || id === 'stale_task_requeue'
+    const defaultEnabled = id === 'agent_heartbeat' || id === 'webhook_retry' || id === 'claude_session_scan' || id === 'skill_sync' || id === 'local_agent_sync' || id === 'gateway_agent_sync' || id === 'task_dispatch' || id === 'hermes_background_coo' || id === 'aegis_review' || id === 'recurring_task_spawn' || id === 'stale_task_requeue'
     result.push({
       id,
       name: task.name,
@@ -575,6 +588,7 @@ export async function triggerTask(taskId: string, workspaceId?: number): Promise
   if (taskId === 'local_agent_sync') return syncLocalAgents(workspaceId)
   if (taskId === 'gateway_agent_sync') return syncAgentsFromConfig('manual', workspaceId).then(r => ({ ok: !r.error, message: r.error || `Gateway sync: ${r.created} created, ${r.updated} updated, ${r.synced} total` }))
   if (taskId === 'task_dispatch') return autoRouteInboxTasks().then(async (r) => { const c = await reconcileDeferredTaskCompletions(); const d = await dispatchAssignedTasks(); return { ok: r.ok && c.ok && d.ok, message: [c.message, r.message, d.message].filter(m => m && !m.includes('No ') && !m.includes('none completed')).join(' | ') || 'No tasks' } })
+  if (taskId === 'hermes_background_coo') return runHermesBackgroundTick()
   if (taskId === 'aegis_review') return runAegisReviews()
   if (taskId === 'recurring_task_spawn') return spawnRecurringTasks()
   if (taskId === 'stale_task_requeue') return requeueStaleTasks()

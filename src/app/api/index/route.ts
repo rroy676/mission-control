@@ -54,6 +54,7 @@ const endpoints: Endpoint[] = [
   { path: '/api/sessions/continue', methods: ['POST'], description: 'Continue a local Claude/Codex/OpenCode session with a prompt', tag: 'Sessions', auth: 'operator' },
   { path: '/api/sessions/transcript', methods: ['GET'], description: 'Read local Claude/Codex/Hermes/OpenCode session transcript snippets', tag: 'Sessions', auth: 'viewer' },
   { path: '/api/hermes/actions', methods: ['POST'], description: 'Allowlisted Hermes COO actions', tag: 'Hermes', auth: 'operator' },
+  { path: '/api/hermes/background', methods: ['GET', 'POST'], description: 'Bounded Hermes background COO status and CEO approvals', tag: 'Hermes', auth: 'viewer/admin' },
   { path: '/api/claude/sessions', methods: ['GET'], description: 'Claude CLI session scanner', tag: 'Sessions', auth: 'viewer' },
 
   // ── Activities & Notifications ────────────────────
