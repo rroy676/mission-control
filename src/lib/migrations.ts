@@ -1972,6 +1972,51 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_hermes_coo_approvals_pending ON hermes_coo_approvals(tenant_id, status, requested_at DESC);
       `)
     }
+  },
+  {
+    id: '065_hermes_evidence_first_research',
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS hermes_research_sources (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, workspace_id INTEGER NOT NULL,
+          project_id INTEGER NOT NULL, task_id INTEGER NOT NULL, run_id TEXT NOT NULL, url TEXT NOT NULL,
+          content_type TEXT NOT NULL, content_excerpt TEXT NOT NULL, retrieved_at INTEGER NOT NULL,
+          FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE, FOREIGN KEY (run_id) REFERENCES hermes_coo_runs(run_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_hermes_research_sources_scope ON hermes_research_sources(tenant_id,workspace_id,task_id,run_id);
+        CREATE TABLE IF NOT EXISTS hermes_research_evidence (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, workspace_id INTEGER NOT NULL,
+          project_id INTEGER NOT NULL, task_id INTEGER NOT NULL, run_id TEXT NOT NULL, source_url TEXT NOT NULL,
+          source_title TEXT NOT NULL, publisher TEXT NOT NULL, claim TEXT NOT NULL, evidence_summary TEXT NOT NULL,
+          quoted_fragment TEXT, confidence TEXT NOT NULL CHECK(confidence IN ('high','medium','low')),
+          classification TEXT NOT NULL CHECK(classification IN ('VERIFIED','INFERRED','UNVERIFIED','CONFLICTING')), retrieved_at INTEGER NOT NULL,
+          FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE, FOREIGN KEY (run_id) REFERENCES hermes_coo_runs(run_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_hermes_research_evidence_scope ON hermes_research_evidence(tenant_id,workspace_id,task_id,run_id);
+        ALTER TABLE hermes_coo_runs ADD COLUMN research_stage TEXT DEFAULT 'PLAN';
+        ALTER TABLE hermes_coo_runs ADD COLUMN research_iterations INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE hermes_coo_runs ADD COLUMN research_source_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE hermes_coo_runs ADD COLUMN evidence_count INTEGER NOT NULL DEFAULT 0;
+      `)
+    }
+  },
+  {
+    id: '066_hermes_research_state_machine',
+    up(db) {
+      db.exec(`
+        ALTER TABLE hermes_research_sources ADD COLUMN final_url TEXT;
+        ALTER TABLE hermes_research_sources ADD COLUMN title TEXT DEFAULT '';
+        ALTER TABLE hermes_research_sources ADD COLUMN publisher TEXT DEFAULT '';
+        ALTER TABLE hermes_research_sources ADD COLUMN http_status INTEGER;
+        ALTER TABLE hermes_research_sources ADD COLUMN content_hash TEXT;
+        ALTER TABLE hermes_research_sources ADD COLUMN fetch_outcome TEXT NOT NULL DEFAULT 'SUCCESS';
+        ALTER TABLE hermes_research_sources ADD COLUMN selected INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE hermes_research_sources ADD COLUMN rejection_reason TEXT;
+        ALTER TABLE hermes_research_evidence ADD COLUMN source_id INTEGER;
+        ALTER TABLE hermes_research_evidence ADD COLUMN entity TEXT;
+        CREATE INDEX IF NOT EXISTS idx_hermes_research_evidence_source ON hermes_research_evidence(source_id);
+      `)
+    }
   }
 ]
 

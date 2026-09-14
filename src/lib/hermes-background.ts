@@ -6,13 +6,14 @@ import { readAuthorityShadowState } from './authority/state'
 import { buildHermesProjectContext, bindingForSession, createHermesTask, saveHermesMemory } from './hermes-coo'
 import { sendHermesBackgroundMessage } from './hermes-runtime'
 import { resolveEffectiveModel, type EffectiveModel } from './model-profiles'
+import { fetchPublicJsonApi, fetchPublicUrl, recordResearchFailure, researchChecklist, researchCounts, saveHermesEvidence, searchPublicWeb, HERMES_RESEARCH_LIMITS } from './hermes-research'
 import type { User } from './auth'
 
 export const HERMES_BACKGROUND_LIMITS = {
   maxActivePerTenant: 1,
   maxActivePerAgent: 1,
   maxNewClaimsPerTick: 1,
-  maxActionsPerRun: 8,
+  maxActionsPerRun: 32,
   maxAttempts: 3,
   maxRunSeconds: 10 * 60,
   staleAfterSeconds: 2 * 60,
@@ -65,7 +66,7 @@ function tenantModel(tenantId: number, agentId: number, db = getDatabase()): Eff
 
 function updateRun(runId: string, fields: Record<string, unknown>) {
   const db = getDatabase()
-  const allowed = new Set(['status', 'heartbeat_at', 'completed_at', 'provider_id', 'model_id', 'model_profile_id', 'input_tokens', 'output_tokens', 'cost_usd', 'last_meaningful_activity', 'stop_reason', 'error_classification', 'approval_id', 'action_count'])
+  const allowed = new Set(['status', 'heartbeat_at', 'completed_at', 'provider_id', 'model_id', 'model_profile_id', 'input_tokens', 'output_tokens', 'cost_usd', 'last_meaningful_activity', 'stop_reason', 'error_classification', 'approval_id', 'action_count', 'research_stage', 'research_iterations', 'research_source_count', 'evidence_count'])
   const entries = Object.entries(fields).filter(([key]) => allowed.has(key))
   if (!entries.length) return
   db.prepare(`UPDATE hermes_coo_runs SET ${entries.map(([key]) => `${key} = ?`).join(', ')} WHERE run_id = ?`).run(...entries.map(([, value]) => value), runId)
@@ -94,6 +95,18 @@ function markTask(db: ReturnType<typeof getDatabase>, taskId: number, workspaceI
   db_helpers.logActivity('hermes_background_task', 'task', taskId, 'Hermes', detail, { status }, workspaceId)
 }
 
+function requiresResearch(task: any) { return /research|evidence|citation|source|api|feasibility|licen[cs]e|url/i.test(`${task.title} ${task.description}`) }
+function meetsResearchCriteria(task: any, result: string, counts: { source_count: number; evidence_count: number }, runId = '') {
+  if (!requiresResearch(task)) return true
+  const lower = result.toLowerCase()
+  const task14 = task.id === 14 || /quebec price data feasibility/i.test(task.title)
+  if (task14) {
+    const checklist = researchChecklist({ tenantId: task.tenant_id, workspaceId: task.workspace_id, taskId: task.id, runId })
+    return counts.evidence_count >= 6 && counts.source_count >= 6 && ['epiceries.ca', 'api', 'schema', 'matrix', 'commercial'].every((term) => lower.includes(term)) && Object.values(checklist).every(Boolean)
+  }
+  return counts.evidence_count > 0 && /https?:\/\//i.test(result)
+}
+
 async function executeClaim(task: any): Promise<{ ok: boolean; message: string }> {
   const db = getDatabase()
   const runId = randomUUID()
@@ -113,19 +126,23 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
   const sessionId = `mc_${task.tenant_id}_${task.workspace_id}_${task.agent_id}_${task.project_id}_bg_${runId.replaceAll('-', '')}`
   const binding = { tenantId: task.tenant_id, workspaceId: task.workspace_id, agentId: task.agent_id, projectId: task.project_id, sessionId }
   let actionCount = 0
+  let researchSearches = 0
+  let researchFetches = 0
   let approvalId: string | null = null
   const heartbeat = (activity: string) => updateRun(runId, { heartbeat_at: now(), last_meaningful_activity: activity })
 
   try {
     const context = await buildHermesProjectContext(user, task.project_id)
     const metadata = parseMetadata(task.metadata)
-    const systemMessage = `Mission Control background COO execution. You are operating only on the server-authorized tenant ${task.tenant_id}, project ${task.project_id}, task ${task.id}. No shell, PTY, process spawn, arbitrary HTTP, credentials, filesystem mutation, financial action, deployment, or architecture change is available. You may emit only these bounded actions: SAVE_WORKING_MEMORY, CREATE_TASK (must be assigned to yourself), UPDATE_TASK_RESULT (current task only), REQUEST_CEO_APPROVAL. Do not create follow-up tasks unless strictly required by the task and never create more than one. Do not request external actions for this task. Project context: ${JSON.stringify(context)}\nTask: ${JSON.stringify({ id: task.id, title: task.title, description: task.description, priority: task.priority })}`
+    const research = requiresResearch(task)
+    const systemMessage = `Mission Control background COO execution. You are operating only on the server-authorized tenant ${task.tenant_id}, project ${task.project_id}, task ${task.id}. No shell, PTY, process spawn, credentials, filesystem mutation, financial action, deployment, or architecture change is available. ${research ? `This is an evidence-first research task. You MUST perform research before writing prose. Available exact action envelopes are: <mc_action>{"action":"SEARCH_WEB","parameters":{"query":"..."}}</mc_action>, <mc_action>{"action":"FETCH_PUBLIC_URL","parameters":{"url":"https://..."}}</mc_action>, <mc_action>{"action":"FETCH_PUBLIC_JSON_API","parameters":{"url":"https://..."}}</mc_action>, and <mc_action>{"action":"SAVE_RESEARCH_EVIDENCE","parameters":{"url":"https://...","title":"...","claim":"...","summary":"...","classification":"VERIFIED|INFERRED|UNVERIFIED|CONFLICTING","confidence":"high|medium|low"}}</mc_action>. Emit one or more of these exact actions now, then continue after tool results. Inspect sources, preserve exact URLs, dates and evidence, and label each material claim VERIFIED, INFERRED, UNVERIFIED, or CONFLICTING. Do not invent access, legal, licensing, or commercial conclusions. Required outputs must cite saved evidence.` : ''} You may emit only these bounded actions: SAVE_WORKING_MEMORY, CREATE_TASK (must be assigned to yourself), UPDATE_TASK_RESULT (current task only), REQUEST_CEO_APPROVAL, SEARCH_WEB, FETCH_PUBLIC_URL, FETCH_PUBLIC_JSON_API, SAVE_RESEARCH_EVIDENCE. Do not create follow-up tasks unless strictly required by the task and never create more than one. Project context: ${JSON.stringify(context)}\nTask: ${JSON.stringify({ id: task.id, title: task.title, description: task.description, priority: task.priority })}`
     let timeout: ReturnType<typeof setTimeout> | undefined
     const result = await Promise.race([
       sendHermesBackgroundMessage({
         tenantId: task.tenant_id, workspaceId: task.workspace_id, agentId: task.agent_id, projectId: task.project_id,
         sessionId, message: `Execute the bounded task. Work only within the supplied context. Save useful working memory when appropriate, write a concise result, and use UPDATE_TASK_RESULT for the current task when finished.`,
         systemMessage, provider: model.provider_id, model: model.model_id, onHeartbeat: heartbeat,
+        researchRequired: research, maxIterations: HERMES_RESEARCH_LIMITS.maxIterations,
         onAction: async (action) => {
           if (isPaused()) throw new Error('Mission Control is PAUSED')
           actionCount += 1
@@ -134,6 +151,28 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
           const params = action.parameters || {}
           if (action.action === 'SAVE_WORKING_MEMORY') {
             return saveHermesMemory(user, binding, { title: String(params.title || '').slice(0, 240), content: String(params.content || '').slice(0, 20000), memory_type: (params.memory_type === 'current_state' || params.memory_type === 'product_context' || params.memory_type === 'operational_note') ? params.memory_type : 'operational_note' })
+          }
+          if (action.action === 'SEARCH_WEB') {
+            researchSearches += 1
+            if (researchSearches > HERMES_RESEARCH_LIMITS.maxSearches) throw new Error('Hermes research search limit exceeded')
+            updateRun(runId, { research_stage: 'SEARCH', heartbeat_at: now() })
+            try { return await searchPublicWeb(String(params.query || ''), { tenantId: task.tenant_id, workspaceId: task.workspace_id, projectId: task.project_id, taskId: task.id, runId }) }
+            catch (error) { return { error: String(error instanceof Error ? error.message : error).slice(0, 300), query: String(params.query || '') } }
+          }
+          if (action.action === 'FETCH_PUBLIC_URL' || action.action === 'FETCH_PUBLIC_JSON_API') {
+            researchFetches += 1
+            if (researchFetches > HERMES_RESEARCH_LIMITS.maxFetches) throw new Error('Hermes research fetch limit exceeded')
+            updateRun(runId, { research_stage: 'FETCH', heartbeat_at: now() })
+            const scope = { tenantId: task.tenant_id, workspaceId: task.workspace_id, projectId: task.project_id, taskId: task.id, runId }
+            try { return action.action === 'FETCH_PUBLIC_JSON_API' ? await fetchPublicJsonApi(String(params.url || ''), scope) : await fetchPublicUrl(String(params.url || ''), scope) }
+            catch (error) { const message = String(error instanceof Error ? error.message : error).slice(0, 300); const sourceId = recordResearchFailure(scope, String(params.url || ''), message); return { error: message, source_id: sourceId, url: String(params.url || '') } }
+          }
+          if (action.action === 'SAVE_RESEARCH_EVIDENCE') {
+            updateRun(runId, { research_stage: 'ASSESS', heartbeat_at: now() })
+            return saveHermesEvidence({ tenantId: task.tenant_id, workspaceId: task.workspace_id, projectId: task.project_id, taskId: task.id, runId }, {
+              url: String(params.url || ''), title: String(params.title || ''), publisher: String(params.publisher || ''), claim: String(params.claim || ''), summary: String(params.summary || params.evidence_summary || ''), quote: typeof params.quote === 'string' ? params.quote : undefined, entity: typeof params.entity === 'string' ? params.entity : undefined,
+              confidence: ['high', 'medium', 'low'].includes(String(params.confidence)) ? params.confidence as any : 'low', classification: ['VERIFIED', 'INFERRED', 'UNVERIFIED', 'CONFLICTING'].includes(String(params.classification)) ? params.classification as any : 'UNVERIFIED',
+            })
           }
           if (action.action === 'CREATE_TASK') {
             const input: any = { title: params.title, objective: params.objective, acceptance_criteria: Array.isArray(params.acceptance_criteria) ? params.acceptance_criteria : [], priority: params.priority || 'low', dependencies: Array.isArray(params.dependencies) ? params.dependencies : [], assignee: task.agent_name, labels: ['hermes-background'] }
@@ -157,6 +196,8 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
             if (Number(params.task_id) !== task.id) throw new Error('Hermes may update only the current task')
             const resultText = String(params.result || params.resolution || '').trim().slice(0, 10000)
             if (!resultText) throw new Error('Task result is required')
+            const counts = researchCounts({ tenantId: task.tenant_id, workspaceId: task.workspace_id, taskId: task.id, runId })
+            if (!meetsResearchCriteria(task, resultText, counts, runId)) return { task_id: task.id, status: 'in_progress', completion_rejected: true, reason: 'Required evidence-backed deliverables are incomplete', ...counts }
             const requested = String(params.status || 'review')
             const status = requested === 'done' && parseMetadata(task.metadata).hermes_autonomous_completion === true ? 'done' : requested === 'blocked' ? 'blocked' : requested === 'awaiting_owner' ? 'awaiting_owner' : 'review'
             db.prepare('INSERT INTO comments (task_id,author,content,created_at,workspace_id) VALUES (?,?,?,?,?)').run(task.id, task.agent_name, resultText, now(), task.workspace_id)
@@ -170,12 +211,15 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
     ]).finally(() => { if (timeout) clearTimeout(timeout) })
     const response = result as any
     const resolution = response.response.slice(0, 10000)
+    const counts = researchCounts({ tenantId: task.tenant_id, workspaceId: task.workspace_id, taskId: task.id, runId })
     const current = db.prepare('SELECT status, resolution FROM tasks WHERE id = ? AND workspace_id = ?').get(task.id, task.workspace_id) as any
-    if (current.status === 'in_progress') {
+    if (current.status === 'in_progress' && research && !meetsResearchCriteria(task, resolution, counts, runId)) {
+      markTask(db, task.id, task.workspace_id, 'blocked', 'Hermes blocked: evidence-first completion criteria were not met', `Research blocked: ${counts.evidence_count} evidence items and ${counts.source_count} sources persisted; required deliverables remain incomplete.`)
+    } else if (current.status === 'in_progress') {
       db.prepare('INSERT INTO comments (task_id,author,content,created_at,workspace_id) VALUES (?,?,?,?,?)').run(task.id, task.agent_name, resolution, now(), task.workspace_id)
       markTask(db, task.id, task.workspace_id, 'review', 'Hermes completed reasoning; task awaits review', resolution)
     }
-    updateRun(runId, { status: 'SUCCEEDED', completed_at: now(), heartbeat_at: now(), input_tokens: response.inputTokens || 0, output_tokens: response.outputTokens || 0, stop_reason: 'bounded_execution_completed', last_meaningful_activity: 'Hermes background execution completed' })
+    updateRun(runId, { status: 'SUCCEEDED', completed_at: now(), heartbeat_at: now(), input_tokens: response.inputTokens || 0, output_tokens: response.outputTokens || 0, research_stage: 'VALIDATE', research_iterations: response.iterations || 1, research_source_count: counts.source_count, evidence_count: counts.evidence_count, stop_reason: 'bounded_execution_completed', last_meaningful_activity: 'Hermes background execution completed' })
     audit(runId, 'hermes.background_run_succeeded', { task_id: task.id, action_count: actionCount }, task.workspace_id, task.tenant_id)
     return { ok: true, message: `Hermes completed task ${task.id}` }
   } catch (error: any) {
@@ -223,7 +267,7 @@ export function getHermesBackgroundStatus(workspaceId?: number) {
   const db = getDatabase()
   const where = workspaceId ? 'AND workspace_id = ?' : ''
   const params = workspaceId ? [workspaceId] : []
-  const active = db.prepare(`SELECT * FROM hermes_coo_runs WHERE status IN ('QUEUED','RUNNING','WAITING_FOR_CEO') ${where} ORDER BY started_at DESC LIMIT 1`).get(...params) as any
+  const active = db.prepare(`SELECT r.*, (SELECT COUNT(*) FROM hermes_research_sources s WHERE s.run_id=r.run_id AND s.tenant_id=r.tenant_id) AS research_source_count, (SELECT COUNT(*) FROM hermes_research_evidence e WHERE e.run_id=r.run_id AND e.tenant_id=r.tenant_id) AS evidence_count FROM hermes_coo_runs r WHERE r.status IN ('QUEUED','RUNNING','WAITING_FOR_CEO') ${where.replaceAll('workspace_id', 'r.workspace_id')} ORDER BY r.started_at DESC LIMIT 1`).get(...params) as any
   const next = db.prepare(`SELECT id,title,project_id,status,assigned_to,created_at FROM tasks WHERE status = 'assigned' AND lower(assigned_to) = 'hermes' AND json_extract(COALESCE(metadata, '{}'), '$.hermes_autonomous') = 1 ${workspaceId ? 'AND workspace_id = ?' : ''} ORDER BY created_at LIMIT 1`).get(...params) as any
   const completedToday = db.prepare(`SELECT COUNT(*) c FROM hermes_coo_runs WHERE status = 'SUCCEEDED' AND completed_at >= unixepoch('start of day') ${workspaceId ? 'AND workspace_id = ?' : ''}`).get(...params) as any
   const blocked = db.prepare(`SELECT id,title,status,project_id,updated_at,error_message FROM tasks WHERE status IN ('blocked','awaiting_owner') ${workspaceId ? 'AND workspace_id = ?' : ''} AND (lower(assigned_to) = 'hermes' OR json_extract(COALESCE(metadata, '{}'), '$.hermes_autonomous') = 1) ORDER BY updated_at DESC LIMIT 20`).all(...params)

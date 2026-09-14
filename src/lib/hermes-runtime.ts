@@ -157,7 +157,7 @@ export function extractHermesAction(content: string): { action: string; paramete
   if (match) try {
     const parsed = JSON.parse(match[1]) as { name?: string; action?: string; arguments?: Record<string, unknown>; parameters?: Record<string, unknown> } & Record<string, unknown>
     const actionName = typeof parsed.name === 'string' ? parsed.name : parsed.action
-    if (!actionName || !['CREATE_TASK', 'SAVE_WORKING_MEMORY', 'REQUEST_CEO_APPROVAL', 'UPDATE_TASK_RESULT'].includes(actionName)) return null
+    if (!actionName || !['CREATE_TASK', 'SAVE_WORKING_MEMORY', 'REQUEST_CEO_APPROVAL', 'UPDATE_TASK_RESULT', 'SEARCH_WEB', 'FETCH_PUBLIC_URL', 'FETCH_PUBLIC_JSON_API', 'SAVE_RESEARCH_EVIDENCE'].includes(actionName)) return null
     const rawParameters = parsed.arguments && typeof parsed.arguments === 'object'
       ? parsed.arguments
       : parsed.parameters && typeof parsed.parameters === 'object'
@@ -191,7 +191,7 @@ export function extractHermesAction(content: string): { action: string; paramete
     delete parameters.task_type
     delete parameters.project_id
   }
-  return ['CREATE_TASK', 'SAVE_WORKING_MEMORY', 'REQUEST_CEO_APPROVAL', 'UPDATE_TASK_RESULT'].includes(action) ? { action, parameters } : null
+  return ['CREATE_TASK', 'SAVE_WORKING_MEMORY', 'REQUEST_CEO_APPROVAL', 'UPDATE_TASK_RESULT', 'SEARCH_WEB', 'FETCH_PUBLIC_URL', 'FETCH_PUBLIC_JSON_API', 'SAVE_RESEARCH_EVIDENCE'].includes(action) ? { action, parameters } : null
 }
 
 export function extractHermesActions(content: string): Array<{ action: string; parameters: Record<string, unknown> }> {
@@ -267,6 +267,8 @@ export async function sendHermesBackgroundMessage(input: {
   model: string
   onAction: (action: { action: string; parameters: Record<string, unknown> }) => Promise<unknown>
   onHeartbeat?: (activity: string) => void
+  maxIterations?: number
+  researchRequired?: boolean
 }) {
   const { sessionId } = await ensureHermesSession({
     tenantId: input.tenantId,
@@ -290,39 +292,51 @@ export async function sendHermesBackgroundMessage(input: {
   let normalized = normalizeHermesResponse(result.body)
   if (!normalized.content) throw new HermesRuntimeError('invalid_response', 'Hermes returned an empty background response', 502)
   const firstUsage = result.body?.usage || result.body?.meta?.usage || {}
-  const actions = extractHermesActions(normalized.content)
+  let actions = extractHermesActions(normalized.content)
   const actionResults: unknown[] = []
+  let iterations = 1
+  let totalInput = Number(firstUsage.input_tokens ?? firstUsage.prompt_tokens ?? 0)
+  let totalOutput = Number(firstUsage.output_tokens ?? firstUsage.completion_tokens ?? 0)
   for (const action of actions) {
     input.onHeartbeat?.(`Executing bounded action ${action.action}`)
     actionResults.push(await input.onAction(action))
   }
-  if (actions.length) {
+  while ((actions.length || input.researchRequired) && iterations < (input.maxIterations || 6)) {
+    iterations += 1
     const followup = await request(`/api/sessions/${encodeURIComponent(sessionId)}/chat`, {
       method: 'POST',
       body: JSON.stringify({
-        message: `<tool_response>${JSON.stringify({ results: actionResults })}</tool_response>`,
-        system_message: 'Continue with a concise final result. Do not emit another action.',
+        message: actions.length
+          ? `<tool_response>${JSON.stringify({ results: actionResults.slice(-actions.length) })}</tool_response>`
+          : 'Research protocol violation: no research action was emitted. Emit exactly one SEARCH_WEB action now using <mc_action>{"action":"SEARCH_WEB","parameters":{"query":"..."}}</mc_action>. Do not write prose yet.',
+        system_message: actions.at(-1)?.action === 'FETCH_PUBLIC_URL' || actions.at(-1)?.action === 'FETCH_PUBLIC_JSON_API'
+          ? 'The fetch succeeded. You MUST now emit SAVE_RESEARCH_EVIDENCE for every material claim supported by that fetched source, using its exact URL and classification. Emit the exact action envelope; do not write prose.'
+          : actions.at(-1)?.action === 'SEARCH_WEB'
+            ? 'The search succeeded. You MUST now emit FETCH_PUBLIC_URL or FETCH_PUBLIC_JSON_API for relevant results, beginning with the official documentation or API URL. Emit the exact action envelope; do not write prose.'
+            : 'Continue the bounded research loop. If required evidence or deliverables are missing, emit the next bounded research action. Otherwise emit UPDATE_TASK_RESULT with the complete evidence-backed result. Do not claim a fact without a saved source reference.',
       }),
     }, [], PROJECT_CHAT_TIMEOUT_MS)
     normalized = normalizeHermesResponse(followup.body)
     if (!normalized.content) throw new HermesRuntimeError('invalid_response', 'Hermes returned an empty background follow-up', 502)
     const followupUsage = followup.body?.usage || followup.body?.meta?.usage || {}
-    return {
-      sessionId,
-      response: normalized.content,
-      actions,
-      actionResults,
-      inputTokens: Number(firstUsage.input_tokens ?? firstUsage.prompt_tokens ?? 0) + Number(followupUsage.input_tokens ?? followupUsage.prompt_tokens ?? 0),
-      outputTokens: Number(firstUsage.output_tokens ?? firstUsage.completion_tokens ?? 0) + Number(followupUsage.output_tokens ?? followupUsage.completion_tokens ?? 0),
+    totalInput += Number(followupUsage.input_tokens ?? followupUsage.prompt_tokens ?? 0)
+    totalOutput += Number(followupUsage.output_tokens ?? followupUsage.completion_tokens ?? 0)
+    const nextActions = extractHermesActions(normalized.content)
+    if (!nextActions.length) {
+      if (input.researchRequired) { actions = []; continue }
+      break
     }
+    actions = nextActions
+    for (const action of actions) { input.onHeartbeat?.(`Executing bounded action ${action.action}`); actionResults.push(await input.onAction(action)) }
   }
   return {
     sessionId,
     response: normalized.content,
     actions,
     actionResults,
-    inputTokens: Number(firstUsage.input_tokens ?? firstUsage.prompt_tokens ?? 0),
-    outputTokens: Number(firstUsage.output_tokens ?? firstUsage.completion_tokens ?? 0),
+    iterations,
+    inputTokens: totalInput,
+    outputTokens: totalOutput,
   }
 }
 export function recordHermesInteraction(input: { workspaceId: number; tenantId: number; agentId: number; actor: string; message: string; response: string; sessionId: string; projectId?: number | null }) {

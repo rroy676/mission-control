@@ -124,4 +124,4 @@ export function saveHermesMemory(user: User, binding: HermesBinding, input: { ti
   return memory
 }
 
-export const HERMES_ACTIONS = ['CREATE_TASK', 'SAVE_WORKING_MEMORY', 'REQUEST_CEO_APPROVAL'] as const
+export const HERMES_ACTIONS = ['CREATE_TASK', 'SAVE_WORKING_MEMORY', 'REQUEST_CEO_APPROVAL', 'UPDATE_TASK_RESULT', 'SEARCH_WEB', 'FETCH_PUBLIC_URL', 'FETCH_PUBLIC_JSON_API', 'SAVE_RESEARCH_EVIDENCE'] as const
