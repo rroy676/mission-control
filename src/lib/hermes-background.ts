@@ -90,6 +90,22 @@ export function updateHermesTaskStatus(db: Pick<ReturnType<typeof getDatabase>, 
     .run(status, timestamp, status, timestamp, resolution || null, resolution || null, taskId, workspaceId)
 }
 
+export function normalizeHermesTaskResultIdentity(parameters: Record<string, unknown>, canonicalTaskId: number) {
+  const supplied = parameters.task_id
+  if (supplied === undefined || supplied === null || supplied === '') {
+    return { taskId: canonicalTaskId, mismatch: false as const }
+  }
+  const parsed = Number(supplied)
+  if (Number.isInteger(parsed) && parsed === canonicalTaskId) {
+    return { taskId: canonicalTaskId, mismatch: false as const }
+  }
+  return {
+    taskId: canonicalTaskId,
+    mismatch: true as const,
+    suppliedTaskId: String(supplied).slice(0, 120),
+  }
+}
+
 function markTask(db: ReturnType<typeof getDatabase>, taskId: number, workspaceId: number, status: string, detail: string, resolution?: string) {
   const timestamp = now()
   updateHermesTaskStatus(db, taskId, workspaceId, status, resolution, timestamp)
@@ -195,7 +211,14 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
             throw new ApprovalRequested(approvalId)
           }
           if (action.action === 'UPDATE_TASK_RESULT') {
-            if (Number(params.task_id) !== task.id) throw new Error('Hermes may update only the current task')
+            const identity = normalizeHermesTaskResultIdentity(params, task.id)
+            if (identity.mismatch) {
+              audit(runId, 'hermes.background_task_identity_normalized', {
+                action: action.action,
+                supplied_task_id: identity.suppliedTaskId,
+                canonical_task_id: identity.taskId,
+              }, task.workspace_id, task.tenant_id)
+            }
             const resultText = String(params.result || params.resolution || '').trim().slice(0, 10000)
             if (!resultText) throw new Error('Task result is required')
             const counts = researchCounts({ tenantId: task.tenant_id, workspaceId: task.workspace_id, taskId: task.id, runId })
