@@ -15,7 +15,14 @@ export const HERMES_RESEARCH_LIMITS = {
 type Scope = { tenantId: number; workspaceId: number; projectId: number; taskId: number; runId: string }
 export type ResearchStage = 'PLAN' | 'SEARCH' | 'SELECT_SOURCE' | 'FETCH' | 'EXTRACT_EVIDENCE' | 'PERSIST_EVIDENCE' | 'ASSESS_GAPS' | 'SYNTHESIZE' | 'VALIDATE_DELIVERABLE' | 'REVIEW'
 export type ResearchRequirementStatus = 'PENDING' | 'IN_PROGRESS' | 'SATISFIED' | 'BLOCKED' | 'NOT_FOUND'
-export type ResearchRequirement = { id: string; ordinal: number; phase: 'P0' | 'P1' | 'P2'; label: string; objective: string }
+export type ResearchRequirement = {
+  id: string
+  ordinal: number
+  phase: 'P0' | 'P1' | 'P2'
+  label: string
+  objective: string
+  dependsOn?: readonly string[]
+}
 export const TASK14_RESEARCH_REQUIREMENTS: readonly ResearchRequirement[] = [
   { id: 'epiceries_docs', ordinal: 1, phase: 'P0', label: 'official épiceries.ca developer/API documentation', objective: 'Locate the official épiceries.ca developer or API documentation and establish whether it exists.' },
   { id: 'epiceries_fetch', ordinal: 2, phase: 'P0', label: 'fetch official épiceries.ca documentation', objective: 'Fetch the official épiceries.ca documentation URL using the bounded public fetch action.' },
@@ -31,13 +38,13 @@ export const TASK14_RESEARCH_REQUIREMENTS: readonly ResearchRequirement[] = [
   { id: 'retailer_iga', ordinal: 12, phase: 'P1', label: 'IGA/Sobeys', objective: 'Assess IGA/Sobeys with authoritative evidence or explicitly record that no authoritative source was located within the bounded research.' },
   { id: 'retailer_walmart', ordinal: 13, phase: 'P1', label: 'Walmart Canada', objective: 'Assess Walmart Canada with authoritative evidence or explicitly record that no authoritative source was located within the bounded research.' },
   { id: 'retailer_giant_tiger', ordinal: 14, phase: 'P1', label: 'Giant Tiger', objective: 'Assess Giant Tiger with authoritative evidence or explicitly record that no authoritative source was located within the bounded research.' },
-  { id: 'technical_matrix', ordinal: 15, phase: 'P2', label: 'technical feasibility matrix', objective: 'Synthesize an evidence-backed technical feasibility matrix for all six retailers.' },
-  { id: 'commercial_matrix', ordinal: 16, phase: 'P2', label: 'commercial/legal uncertainty matrix', objective: 'Synthesize an evidence-backed commercial and legal uncertainty matrix.' },
-  { id: 'primary_poc', ordinal: 17, phase: 'P2', label: 'primary POC recommendation', objective: 'Recommend a primary POC source using persisted evidence.' },
-  { id: 'fallback', ordinal: 18, phase: 'P2', label: 'backup/fallback strategy', objective: 'Define an evidence-backed backup or fallback data strategy.' },
-  { id: 'avoid', ordinal: 19, phase: 'P2', label: 'sources/approaches to avoid', objective: 'Identify sources or approaches to avoid for now, with evidence.' },
-  { id: 'permission_questions', ordinal: 20, phase: 'P2', label: 'unresolved permission questions', objective: 'List unresolved permission, licensing, attribution, and legal questions.' },
-  { id: 'recommendation', ordinal: 21, phase: 'P2', label: 'GO / CONDITIONAL GO / NO-GO', objective: 'Make the final evidence-backed GO, CONDITIONAL GO, or NO-GO recommendation.' },
+  { id: 'technical_matrix', ordinal: 15, phase: 'P2', label: 'technical feasibility matrix', objective: 'Synthesize an evidence-backed technical feasibility matrix for all six retailers.', dependsOn: ['epiceries_docs', 'epiceries_sample', 'epiceries_schema', 'retailer_maxi', 'retailer_metro', 'retailer_super_c', 'retailer_iga', 'retailer_walmart', 'retailer_giant_tiger'] },
+  { id: 'commercial_matrix', ordinal: 16, phase: 'P2', label: 'commercial/legal uncertainty matrix', objective: 'Synthesize an evidence-backed commercial and legal uncertainty matrix.', dependsOn: ['epiceries_commercial', 'retailer_maxi', 'retailer_metro', 'retailer_super_c', 'retailer_iga', 'retailer_walmart', 'retailer_giant_tiger'] },
+  { id: 'primary_poc', ordinal: 17, phase: 'P2', label: 'primary POC recommendation', objective: 'Recommend a primary POC source using persisted evidence.', dependsOn: ['technical_matrix', 'commercial_matrix'] },
+  { id: 'fallback', ordinal: 18, phase: 'P2', label: 'backup/fallback strategy', objective: 'Define an evidence-backed backup or fallback data strategy.', dependsOn: ['technical_matrix'] },
+  { id: 'avoid', ordinal: 19, phase: 'P2', label: 'sources/approaches to avoid', objective: 'Identify sources or approaches to avoid for now, with evidence.', dependsOn: ['commercial_matrix'] },
+  { id: 'permission_questions', ordinal: 20, phase: 'P2', label: 'unresolved permission questions', objective: 'List unresolved permission, licensing, attribution, and legal questions.', dependsOn: ['commercial_matrix'] },
+  { id: 'recommendation', ordinal: 21, phase: 'P2', label: 'GO / CONDITIONAL GO / NO-GO', objective: 'Make the final evidence-backed GO, CONDITIONAL GO, or NO-GO recommendation.', dependsOn: ['primary_poc', 'fallback', 'avoid', 'permission_questions'] },
 ] as const
 export const TASK14_RESEARCH_CHECKLIST = TASK14_RESEARCH_REQUIREMENTS.map((requirement) => requirement.label)
 
@@ -131,37 +138,80 @@ export function markResearchSourceSelected(scope: Scope, sourceId: number, selec
 }
 
 export function saveHermesEvidence(scope: Scope, input: { url: string; title: string; publisher?: string; claim: string; summary: string; quote?: string; confidence: 'high' | 'medium' | 'low'; classification: 'VERIFIED' | 'INFERRED' | 'UNVERIFIED' | 'CONFLICTING'; entity?: string; sourceId?: number }) {
-  if (!/^https:\/\//i.test(input.url) || input.claim.length > 2_000 || input.summary.length > 4_000) throw new Error('Evidence is invalid')
+  if (!/^https:\/\//i.test(input.url) || input.claim.trim().length < 20 || input.claim.length > 2_000 || !input.summary.trim() || input.summary.length > 4_000) {
+    const error = new Error('Evidence is invalid: substantive claim and summary are required') as Error & { researchRepairable?: boolean }
+    error.researchRepairable = true
+    throw error
+  }
+  if (!input.sourceId) {
+    const error = new Error('Evidence is invalid: source_id is required') as Error & { researchRepairable?: boolean }
+    error.researchRepairable = true
+    throw error
+  }
   const quote = input.quote?.slice(0, 600) || null
   const db = getDatabase()
+  const source = db.prepare('SELECT id FROM hermes_research_sources WHERE id=? AND tenant_id=? AND workspace_id=? AND project_id=? AND task_id=? AND run_id=?').get(input.sourceId, scope.tenantId, scope.workspaceId, scope.projectId, scope.taskId, scope.runId)
+  if (!source) throw new Error('Evidence source is not bound to the current research run')
   const result = db.prepare(`INSERT INTO hermes_research_evidence (tenant_id,workspace_id,project_id,task_id,run_id,source_url,source_title,publisher,claim,evidence_summary,quoted_fragment,confidence,classification,retrieved_at,source_id,entity)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch(),?,?)`).run(scope.tenantId, scope.workspaceId, scope.projectId, scope.taskId, scope.runId, input.url, input.title.slice(0, 500), (input.publisher || new URL(input.url).hostname).slice(0, 200), input.claim, input.summary, quote, input.confidence, input.classification, input.sourceId || null, input.entity || null)
   logAuditEvent({ action: 'hermes.research.evidence_saved', actor: 'Hermes', target_type: 'hermes_research_evidence', target_id: Number(result.lastInsertRowid), detail: { ...scope, source_url: input.url, classification: input.classification }, workspace_id: scope.workspaceId, tenant_id: scope.tenantId })
   return { evidence_id: Number(result.lastInsertRowid), classification: input.classification, source_url: input.url }
 }
 
+type RequirementEvidence = { id: number; source_url: string; claim: string; evidence_summary: string; entity: string | null; classification: string; source_id: number | null; source_content_type?: string | null; source_outcome?: string | null }
+type RequirementSource = { id: number; url: string; content_type: string; fetch_outcome: string; http_status: number | null }
+
 function task14RequirementEvidence(scope: Pick<Scope, 'tenantId' | 'workspaceId' | 'projectId' | 'taskId'>) {
   const db = getDatabase()
-  return db.prepare(`SELECT id, source_url, claim, evidence_summary, entity, classification, source_id
+  return db.prepare(`SELECT e.id, e.source_url, e.claim, e.evidence_summary, e.entity, e.classification, e.source_id,
+      s.content_type AS source_content_type, s.fetch_outcome AS source_outcome
     FROM hermes_research_evidence
-    WHERE tenant_id=? AND workspace_id=? AND project_id=? AND task_id=? AND COALESCE(entity, '') != 'source-retrieval'
-    ORDER BY id`).all(scope.tenantId, scope.workspaceId, scope.projectId, scope.taskId) as Array<{ id: number; source_url: string; claim: string; evidence_summary: string; entity: string | null; classification: string; source_id: number | null }>
+    e LEFT JOIN hermes_research_sources s ON s.id=e.source_id
+    WHERE e.tenant_id=? AND e.workspace_id=? AND e.project_id=? AND e.task_id=? AND COALESCE(e.entity, '') != 'source-retrieval'
+    ORDER BY e.id`).all(scope.tenantId, scope.workspaceId, scope.projectId, scope.taskId) as RequirementEvidence[]
+}
+function task14RequirementSources(scope: Pick<Scope, 'tenantId' | 'workspaceId' | 'projectId' | 'taskId'>) {
+  return getDatabase().prepare('SELECT id,url,content_type,fetch_outcome,http_status FROM hermes_research_sources WHERE tenant_id=? AND workspace_id=? AND project_id=? AND task_id=? ORDER BY id').all(scope.tenantId, scope.workspaceId, scope.projectId, scope.taskId) as RequirementSource[]
 }
 
-function requirementMatches(requirement: ResearchRequirement, rows: ReturnType<typeof task14RequirementEvidence>) {
-  const text = rows.map((row) => `${row.entity || ''} ${row.source_url} ${row.claim} ${row.evidence_summary}`.toLowerCase()).join('\n')
-  const has = (...terms: string[]) => terms.every((term) => text.includes(term))
-  if (requirement.id === 'epiceries_docs') return rows.some((row) => row.source_url.toLowerCase().includes('epiceries.ca') && /api|developer|documentation/.test(`${row.claim} ${row.evidence_summary}`.toLowerCase()))
-  if (requirement.id === 'epiceries_fetch') return rows.some((row) => row.source_url.toLowerCase().includes('epiceries.ca'))
-  if (requirement.id === 'epiceries_evidence') return rows.some((row) => row.source_url.toLowerCase().includes('epiceries.ca') && row.claim.trim().length > 20)
-  if (requirement.id === 'epiceries_endpoints') return rows.some((row) => row.source_url.toLowerCase().includes('epiceries.ca') && /endpoint|api|route|operation/.test(`${row.claim} ${row.evidence_summary}`.toLowerCase()))
-  if (requirement.id === 'epiceries_sample') return rows.some((row) => row.source_url.toLowerCase().includes('epiceries.ca') && /sample|response|json|api/.test(`${row.claim} ${row.evidence_summary}`.toLowerCase()))
-  if (requirement.id === 'epiceries_schema') return rows.some((row) => row.source_url.toLowerCase().includes('epiceries.ca') && /schema|field|product|price/.test(`${row.claim} ${row.evidence_summary}`.toLowerCase()))
-  if (requirement.id === 'epiceries_access') return rows.some((row) => row.source_url.toLowerCase().includes('epiceries.ca') && /auth|rate|update|frequency|usage/.test(`${row.claim} ${row.evidence_summary}`.toLowerCase()))
-  if (requirement.id === 'epiceries_commercial') return rows.some((row) => row.source_url.toLowerCase().includes('epiceries.ca') && /commercial|permission|license|licens|terms|attribution/.test(`${row.claim} ${row.evidence_summary}`.toLowerCase()))
+function parseActionRefs(value: string) {
+  try {
+    const parsed = JSON.parse(value || '[]') as unknown[]
+    return parsed.map((item) => {
+      if (typeof item === 'string') { try { return JSON.parse(item) as Record<string, unknown> } catch { return {} } }
+      return item as Record<string, unknown>
+    })
+  } catch { return [] }
+}
+function meaningful(row: RequirementEvidence) { return Boolean(row.source_id && row.source_outcome === 'SUCCESS' && row.claim.trim().length >= 20 && row.evidence_summary.trim()) }
+function isEpiceriesUrl(url: string) { return /^https:\/\/(?:www\.)?epiceries\.ca(?:\/|$)/i.test(url) }
+function officialEpiceries(row: RequirementEvidence) { return meaningful(row) && isEpiceriesUrl(row.source_url) }
+function text(row: RequirementEvidence) { return `${row.entity || ''} ${row.claim} ${row.evidence_summary}`.toLowerCase() }
+function retailerName(id: string) { return ({ retailer_maxi: 'maxi', retailer_metro: 'metro', retailer_super_c: 'super c', retailer_iga: 'iga', retailer_walmart: 'walmart', retailer_giant_tiger: 'giant tiger' } as Record<string, string>)[id] }
+
+function requirementMatches(requirement: ResearchRequirement, rows: RequirementEvidence[], sources: RequirementSource[], actionRefs: Array<Record<string, unknown>>, statuses: Map<string, ResearchRequirementStatus>) {
+  if (requirement.dependsOn?.some((id) => statuses.get(id) !== 'SATISFIED')) return false
+  const valid = rows.filter(meaningful)
+  const official = valid.filter(officialEpiceries)
+  const hasAction = (action: string) => actionRefs.some((ref) => ref.action === action && ref.accepted === true)
+  const hasText = (terms: RegExp) => official.some((row) => terms.test(text(row)))
+  if (requirement.id === 'epiceries_docs') return hasText(/api|developer|documentation/)
+  if (requirement.id === 'epiceries_fetch') return sources.some((source) => source.fetch_outcome === 'SUCCESS' && source.http_status && isEpiceriesUrl(source.url))
+  if (requirement.id === 'epiceries_evidence') return official.length > 0
+  if (requirement.id === 'epiceries_endpoints') return hasText(/endpoint|api\s+(index|search|product|history|barcode|storeproduct|categor)|\/(?:api|search|product|history|barcode|storeproduct|categor)/i)
+  if (requirement.id === 'epiceries_sample') return hasAction('FETCH_PUBLIC_JSON_API') && sources.some((source) => source.fetch_outcome === 'SUCCESS' && isEpiceriesUrl(source.url) && /json/i.test(source.content_type))
+  if (requirement.id === 'epiceries_schema') return hasAction('FETCH_PUBLIC_JSON_API') && valid.some((row) => isEpiceriesUrl(row.source_url) && /schema|field|product|price|response/i.test(text(row)))
+  if (requirement.id === 'epiceries_access') return hasText(/auth|api\s*key|public|read.?only|cors|rate|update|frequency|usage/)
+  if (requirement.id === 'epiceries_commercial') return hasText(/commercial|permission|license|licens|terms|attribution|unresolved|uncertain/)
   if (requirement.id.startsWith('retailer_')) {
-    const terms: Record<string, string[]> = { retailer_maxi: ['maxi'], retailer_metro: ['metro'], retailer_super_c: ['super c'], retailer_iga: ['iga'], retailer_walmart: ['walmart'], retailer_giant_tiger: ['giant tiger'] }
-    return has(...(terms[requirement.id] || []))
+    const name = retailerName(requirement.id)
+    return valid.some((row) => {
+      const rowText = text(row)
+      const entity = (row.entity || '').toLowerCase()
+      const direct = entity === `retailer:${name}` || entity === name || (entity.includes(name) && entity !== 'source-retrieval')
+      const notFound = /no authoritative source|authoritative source.*not found|not found within.*bounded/i.test(rowText)
+      return (direct && rowText.includes(name)) || (notFound && entity.includes(name))
+    })
   }
   return false
 }
@@ -177,18 +227,38 @@ export function ensureResearchChecklist(scope: Pick<Scope, 'tenantId' | 'workspa
 }
 
 export function refreshResearchChecklist(scope: Pick<Scope, 'tenantId' | 'workspaceId' | 'projectId' | 'taskId'>) {
+  return recomputeResearchChecklist(scope, false)
+}
+
+export function recomputeResearchChecklist(scope: Pick<Scope, 'tenantId' | 'workspaceId' | 'projectId' | 'taskId'>, audit = true) {
   const db = getDatabase()
   const rows = task14RequirementEvidence(scope)
-  const requirements = db.prepare('SELECT requirement_id, status, source_ids, evidence_ids, action_refs FROM hermes_research_requirements WHERE tenant_id=? AND workspace_id=? AND project_id=? AND task_id=? ORDER BY ordinal').all(scope.tenantId, scope.workspaceId, scope.projectId, scope.taskId) as Array<{ requirement_id: string; status: ResearchRequirementStatus; source_ids: string; evidence_ids: string; action_refs: string }>
-  const update = db.prepare(`UPDATE hermes_research_requirements SET status=?, source_ids=?, evidence_ids=?, updated_at=unixepoch() WHERE tenant_id=? AND workspace_id=? AND project_id=? AND task_id=? AND requirement_id=?`)
+  const sources = task14RequirementSources(scope)
+  const requirements = db.prepare('SELECT requirement_id, status, source_ids, evidence_ids, action_refs, claimed_by_run_id, claimed_at FROM hermes_research_requirements WHERE tenant_id=? AND workspace_id=? AND project_id=? AND task_id=? ORDER BY ordinal').all(scope.tenantId, scope.workspaceId, scope.projectId, scope.taskId) as Array<{ requirement_id: string; status: ResearchRequirementStatus; source_ids: string; evidence_ids: string; action_refs: string; claimed_by_run_id: string | null; claimed_at: number | null }>
+  const prior = requirements.map((row) => ({ id: row.requirement_id, status: row.status, source_ids: row.source_ids, evidence_ids: row.evidence_ids }))
+  const statuses = new Map(requirements.map((row) => [row.requirement_id, row.status]))
+  const update = db.prepare(`UPDATE hermes_research_requirements SET status=?, source_ids=?, evidence_ids=?, claimed_by_run_id=?, claimed_at=?, updated_at=unixepoch() WHERE tenant_id=? AND workspace_id=? AND project_id=? AND task_id=? AND requirement_id=?`)
   for (const row of requirements) {
     const requirement = TASK14_RESEARCH_REQUIREMENTS.find((item) => item.id === row.requirement_id)
-    if (!requirement || row.status === 'BLOCKED' || row.status === 'NOT_FOUND') continue
-    if (requirementMatches(requirement, rows)) {
-      const ids = rows.filter((e) => requirementMatches(requirement, [e])).map((e) => e.id)
-      const sourceIds = rows.filter((e) => requirementMatches(requirement, [e]) && e.source_id).map((e) => e.source_id)
-      update.run('SATISFIED', JSON.stringify(sourceIds), JSON.stringify(ids), scope.tenantId, scope.workspaceId, scope.projectId, scope.taskId, row.requirement_id)
-    }
+    if (!requirement) continue
+    const refs = parseActionRefs(row.action_refs)
+    const matching = requirementMatches(requirement, rows, sources, refs, statuses)
+    const matchingRows = row.requirement_id === 'epiceries_fetch'
+      ? []
+      : rows.filter((e) => {
+        if (row.requirement_id === 'epiceries_sample') return isEpiceriesUrl(e.source_url) && /json|api/i.test(e.source_content_type || '')
+        if (row.requirement_id === 'epiceries_schema') return isEpiceriesUrl(e.source_url) && /schema|field|product|price|response/i.test(text(e))
+        return requirementMatches(requirement, [e], sources, refs, statuses)
+      })
+    const preserveClaim = row.status === 'IN_PROGRESS'
+    const nextStatus: ResearchRequirementStatus = preserveClaim ? 'IN_PROGRESS' : matching ? 'SATISFIED' : (row.status === 'BLOCKED' || row.status === 'NOT_FOUND' ? row.status : 'PENDING')
+    const sourceIds = [...new Set([...matchingRows.map((e) => e.source_id).filter((id): id is number => Boolean(id)), ...(row.requirement_id === 'epiceries_fetch' && matching ? sources.filter((source) => source.fetch_outcome === 'SUCCESS' && source.http_status && isEpiceriesUrl(source.url)).map((source) => source.id) : [])])]
+    const evidenceIds = matchingRows.map((e) => e.id)
+    update.run(nextStatus, JSON.stringify(sourceIds), JSON.stringify(evidenceIds), nextStatus === 'IN_PROGRESS' ? row.claimed_by_run_id : null, nextStatus === 'IN_PROGRESS' ? row.claimed_at : null, scope.tenantId, scope.workspaceId, scope.projectId, scope.taskId, row.requirement_id)
+    statuses.set(row.requirement_id, nextStatus)
+  }
+  if (audit && JSON.stringify(prior.map((x) => x.status)) !== JSON.stringify(requirements.map((x) => statuses.get(x.requirement_id)))) {
+    logAuditEvent({ action: 'RESEARCH_CHECKLIST_RECOMPUTED', actor: 'Mission Control', target_type: 'hermes_research_checklist', detail: { ...scope, reason: 'requirement_contracts_v1', prior, next: requirements.map((row) => ({ id: row.requirement_id, status: statuses.get(row.requirement_id) })) }, workspace_id: scope.workspaceId, tenant_id: scope.tenantId })
   }
   return getResearchChecklistState(scope)
 }

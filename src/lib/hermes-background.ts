@@ -6,7 +6,7 @@ import { readAuthorityShadowState } from './authority/state'
 import { buildHermesProjectContext, buildHermesResearchProjectContext, bindingForSession, createHermesTask, saveHermesMemory } from './hermes-coo'
 import { sendHermesBackgroundMessage } from './hermes-runtime'
 import { resolveEffectiveModel, type EffectiveModel } from './model-profiles'
-import { beginNextResearchRequirement, compactResearchContext, ensureResearchChecklist, fetchPublicJsonApi, fetchPublicUrl, recordResearchFailure, recoverStaleResearchClaims, researchChecklist, researchCounts, saveHermesEvidence, searchPublicWeb, HERMES_RESEARCH_LIMITS } from './hermes-research'
+import { beginNextResearchRequirement, compactResearchContext, ensureResearchChecklist, fetchPublicJsonApi, fetchPublicUrl, recordResearchFailure, recoverStaleResearchClaims, recomputeResearchChecklist, researchChecklist, researchCounts, saveHermesEvidence, searchPublicWeb, HERMES_RESEARCH_LIMITS } from './hermes-research'
 import type { User } from './auth'
 
 export const HERMES_BACKGROUND_LIMITS = {
@@ -223,7 +223,7 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
           if (action.action === 'SAVE_RESEARCH_EVIDENCE') {
             updateRun(runId, { research_stage: 'ASSESS', heartbeat_at: now() })
             return saveHermesEvidence({ tenantId: task.tenant_id, workspaceId: task.workspace_id, projectId: task.project_id, taskId: task.id, runId }, {
-              url: String(params.url || ''), title: String(params.title || ''), publisher: String(params.publisher || ''), claim: String(params.claim || ''), summary: String(params.summary || params.evidence_summary || ''), quote: typeof params.quote === 'string' ? params.quote : undefined, entity: typeof params.entity === 'string' ? params.entity : undefined,
+              url: String(params.url || ''), title: String(params.title || ''), publisher: String(params.publisher || ''), claim: String(params.claim || ''), summary: String(params.summary || params.evidence_summary || ''), quote: typeof params.quote === 'string' ? params.quote : undefined, entity: typeof params.entity === 'string' ? params.entity : undefined, sourceId: Number.isInteger(Number(params.source_id)) ? Number(params.source_id) : undefined,
               confidence: ['high', 'medium', 'low'].includes(String(params.confidence)) ? params.confidence as any : 'low', classification: ['VERIFIED', 'INFERRED', 'UNVERIFIED', 'CONFLICTING'].includes(String(params.classification)) ? params.classification as any : 'UNVERIFIED',
             })
           }
@@ -327,6 +327,8 @@ export async function runHermesBackgroundTick(): Promise<{ ok: boolean; message:
 export function getHermesBackgroundStatus(workspaceId?: number) {
   const db = getDatabase()
   recoverStaleResearchClaims()
+  const task14 = db.prepare(`SELECT w.tenant_id,t.workspace_id,t.project_id,t.id AS task_id FROM tasks t JOIN workspaces w ON w.id=t.workspace_id WHERE t.title='Quebec Price Data Feasibility' ${workspaceId ? 'AND t.workspace_id=?' : ''} LIMIT 1`).get(...(workspaceId ? [workspaceId] : [])) as any
+  if (task14?.tenant_id != null && task14?.project_id != null) recomputeResearchChecklist({ tenantId: task14.tenant_id, workspaceId: task14.workspace_id, projectId: task14.project_id, taskId: task14.task_id }, true)
   const where = workspaceId ? 'AND workspace_id = ?' : ''
   const params = workspaceId ? [workspaceId] : []
   const active = db.prepare(`SELECT r.*, (SELECT COUNT(*) FROM hermes_research_sources s WHERE s.run_id=r.run_id AND s.tenant_id=r.tenant_id) AS research_source_count, (SELECT COUNT(*) FROM hermes_research_evidence e WHERE e.run_id=r.run_id AND e.tenant_id=r.tenant_id) AS evidence_count FROM hermes_coo_runs r WHERE r.status IN ('QUEUED','RUNNING','WAITING_FOR_CEO') ${where.replaceAll('workspace_id', 'r.workspace_id')} ORDER BY r.started_at DESC LIMIT 1`).get(...params) as any

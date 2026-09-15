@@ -245,6 +245,28 @@ export function validateResearchTurn(content: string, terminal = false): Researc
   return { valid: true, action: actions[0] }
 }
 
+export function validateResearchActionParameters(action: { action: string; parameters: Record<string, unknown> }) {
+  const params = action.parameters || {}
+  const missing = (name: string, condition: boolean) => {
+    if (condition) return null
+    const error = new Error(`${action.action} requires ${name}`) as Error & { researchRepairable?: boolean }
+    error.researchRepairable = true
+    return error
+  }
+  if (action.action === 'SEARCH_WEB') return missing('query', typeof params.query === 'string' && params.query.trim().length > 0)
+  if (action.action === 'FETCH_PUBLIC_URL' || action.action === 'FETCH_PUBLIC_JSON_API') return missing('url', typeof params.url === 'string' && params.url.trim().length > 0)
+  if (action.action === 'SAVE_RESEARCH_EVIDENCE') {
+    return missing('claim, summary, and source_id', typeof params.claim === 'string' && params.claim.trim().length >= 20 && typeof params.summary === 'string' && params.summary.trim().length > 0 && Number.isInteger(Number(params.source_id)) && Number(params.source_id) > 0)
+  }
+  if (action.action === 'UPDATE_TASK_RESULT') return missing('result', typeof params.result === 'string' && params.result.trim().length > 0 || typeof params.resolution === 'string' && params.resolution.trim().length > 0)
+  if (action.action === 'REQUEST_CEO_APPROVAL') return missing('reason', typeof params.reason === 'string' && params.reason.trim().length > 0 || typeof params.question === 'string' && params.question.trim().length > 0)
+  return null
+}
+
+function isRepairableResearchError(error: unknown): error is Error & { researchRepairable: true } {
+  return Boolean(error && typeof error === 'object' && (error as { researchRepairable?: unknown }).researchRepairable === true)
+}
+
 export async function sendHermesMessage(input: { tenantId: number; workspaceId: number; agentId: number; projectId?: number | null; sessionId?: string; message: string; systemMessage?: string; actor: string; actorUser?: User }) {
   const db = getDatabase(), projectId = input.projectId ?? null
   const { sessionId } = await ensureHermesSession(input)
@@ -491,14 +513,33 @@ async function sendStatelessHermesResearch(input: Parameters<typeof sendHermesBa
       validation = validateResearchTurn(normalized.content)
       if (!validation.valid) throw new HermesRuntimeError('invalid_response', `Hermes research turn rejected: ${validation.reason}`, 502)
     }
-    const action = validation.action!
+    let action = validation.action!
     input.onHeartbeat?.(`Executing bounded action ${action.action}`)
     let actionResult: unknown
     try {
+      const parameterError = validateResearchActionParameters(action)
+      if (parameterError) throw parameterError
       actionResult = await input.onAction(action)
     } catch (error) {
-      input.onResearchTurn?.({ turnNumber: iterations, requirementId: prompt.requirementId, ...usage, durationMs: Date.now() - started, responseChars: normalized.content.length, actionType: action.action, actionAccepted: false, repairCount, contextChars: prompt.contextChars, contextEstimatedTokens: prompt.contextEstimatedTokens })
-      throw error
+      if (!isRepairableResearchError(error) || repairCount >= 1) {
+        input.onResearchTurn?.({ turnNumber: iterations, requirementId: prompt.requirementId, ...usage, durationMs: Date.now() - started, responseChars: normalized.content.length, actionType: action.action, actionAccepted: false, repairCount, contextChars: prompt.contextChars, contextEstimatedTokens: prompt.contextEstimatedTokens })
+        throw error
+      }
+      repairCount += 1
+      const repair = await request(`/api/sessions/${encodeURIComponent(turnSessionId)}/chat`, {
+        method: 'POST',
+        body: JSON.stringify({ message: `Parameter error: ${error.message}. Return exactly ONE corrected ${action.action} action with every required field, including a substantive claim and source_id when applicable. Do not emit prose or a second action.`, system_message: 'This is the one allowed repair attempt for this research turn. Preserve the action type and emit exactly one bounded mc_action.', provider: input.provider, model: input.model, require_model_lock: true }),
+      }, [], BACKGROUND_PROJECT_CHAT_TIMEOUT_MS)
+      normalized = normalizeHermesResponse(repair.body)
+      if (!normalized.content) throw new HermesRuntimeError('invalid_response', 'Hermes parameter repair returned an empty response', 502)
+      const repairUsage = usageFromHermesBody(repair.body)
+      usage = { inputTokens: usage.inputTokens + repairUsage.inputTokens, outputTokens: usage.outputTokens + repairUsage.outputTokens, cacheReadTokens: usage.cacheReadTokens + repairUsage.cacheReadTokens, cacheWriteTokens: usage.cacheWriteTokens + repairUsage.cacheWriteTokens }
+      const repairedValidation = validateResearchTurn(normalized.content)
+      if (!repairedValidation.valid || repairedValidation.action?.action !== action.action) throw new HermesRuntimeError('invalid_response', `Hermes research parameter repair rejected: ${repairedValidation.reason || 'action type changed'}`, 502)
+      action = repairedValidation.action
+      const repairedParameterError = validateResearchActionParameters(action)
+      if (repairedParameterError) throw new HermesRuntimeError('invalid_response', repairedParameterError.message, 502)
+      actionResult = await input.onAction(action)
     }
     input.onResearchTurn?.({ turnNumber: iterations, requirementId: prompt.requirementId, ...usage, durationMs: Date.now() - started, responseChars: normalized.content.length, actionType: action.action, actionAccepted: true, repairCount, contextChars: prompt.contextChars, contextEstimatedTokens: prompt.contextEstimatedTokens })
     totalInput += usage.inputTokens

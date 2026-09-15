@@ -13,9 +13,18 @@ import { beginNextResearchRequirement, compactResearchContext, ensureResearchChe
 const scope = { tenantId: 1, workspaceId: 1, projectId: 7, taskId: 14 }
 
 function insertEvidence(input: { tenantId?: number; url: string; claim: string; summary?: string; entity?: string }) {
+  state.db?.prepare(`INSERT OR IGNORE INTO hermes_research_sources
+    (id,tenant_id,workspace_id,project_id,task_id,run_id,url,content_type,http_status,fetch_outcome)
+    VALUES (1,?,?,?,?,?,'https://epiceries.ca/developers','text/html',200,'SUCCESS')`).run(input.tenantId ?? 1, 1, 7, 14, 'run-1')
   state.db?.prepare(`INSERT INTO hermes_research_evidence
     (tenant_id,workspace_id,project_id,task_id,run_id,source_url,source_title,publisher,claim,evidence_summary,confidence,classification,retrieved_at,source_id,entity)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(input.tenantId ?? 1, 1, 7, 14, 'run-1', input.url, 'Source', 'Publisher', input.claim, input.summary || 'Summary', 'high', 'VERIFIED', 1, 1, input.entity || null)
+}
+
+function insertSource(input: { id: number; url: string; contentType?: string; runId?: string }) {
+  state.db?.prepare(`INSERT INTO hermes_research_sources
+    (id,tenant_id,workspace_id,project_id,task_id,run_id,url,content_type,http_status,fetch_outcome)
+    VALUES (?,?,?,?,?,?,?,?,200,'SUCCESS')`).run(input.id, 1, 1, 7, 14, input.runId || 'run-1', input.url, input.contentType || 'text/html')
 }
 
 describe('priority-aware resumable research checklist', () => {
@@ -36,6 +45,10 @@ describe('priority-aware resumable research checklist', () => {
         id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER, workspace_id INTEGER, project_id INTEGER, task_id INTEGER,
         run_id TEXT, source_url TEXT, source_title TEXT, publisher TEXT, claim TEXT, evidence_summary TEXT,
         confidence TEXT, classification TEXT, retrieved_at INTEGER, source_id INTEGER, entity TEXT
+      );
+      CREATE TABLE hermes_research_sources (
+        id INTEGER PRIMARY KEY, tenant_id INTEGER, workspace_id INTEGER, project_id INTEGER, task_id INTEGER,
+        run_id TEXT, url TEXT, content_type TEXT, http_status INTEGER, fetch_outcome TEXT
       );
     `)
   })
@@ -60,7 +73,7 @@ describe('priority-aware resumable research checklist', () => {
 
   it('advances after evidence satisfies the current requirement', () => {
     insertEvidence({ url: 'https://epiceries.ca/developers', claim: 'Official API documentation describes an endpoint and response fields.', entity: 'epiceries.ca' })
-    expect(beginNextResearchRequirement(scope, 'run-1')?.id).toBe('epiceries_access')
+    expect(beginNextResearchRequirement(scope, 'run-1')?.id).toBe('epiceries_sample')
   })
 
   it('skips explicitly blocked requirements and resumes the next one', () => {
@@ -111,5 +124,28 @@ describe('priority-aware resumable research checklist', () => {
     beginNextResearchRequirement(scope, 'missing-run')
     expect(recoverStaleResearchClaims(scope)).toBe(1)
     expect(getResearchChecklistState(scope)[0].status).toBe('PENDING')
+  })
+
+  it('does not satisfy API sample from documentation prose alone', () => {
+    insertEvidence({ url: 'https://epiceries.ca/developers', claim: 'Official documentation describes a public JSON API response and product fields.', entity: 'epiceries.ca' })
+    ensureResearchChecklist(scope)
+    expect(getResearchChecklistState(scope).find((row) => row.requirement_id === 'epiceries_sample')?.status).toBe('PENDING')
+  })
+
+  it('requires an accepted JSON API action and successful JSON source for sample', () => {
+    insertSource({ id: 2, url: 'https://epiceries.ca/api', contentType: 'application/json' })
+    insertEvidence({ url: 'https://epiceries.ca/api', claim: 'The bounded API response exposed product and price fields.', entity: 'epiceries.ca' })
+    state.db?.prepare("UPDATE hermes_research_evidence SET source_id=2 WHERE id=(SELECT max(id) FROM hermes_research_evidence)").run()
+    ensureResearchChecklist(scope)
+    state.db?.prepare("UPDATE hermes_research_requirements SET action_refs='[{\"action\":\"FETCH_PUBLIC_JSON_API\",\"accepted\":true}]' WHERE requirement_id='epiceries_sample'").run()
+    refreshResearchChecklist(scope)
+    expect(getResearchChecklistState(scope).find((row) => row.requirement_id === 'epiceries_sample')?.status).toBe('SATISFIED')
+  })
+
+  it('does not let an epiceries supported-store list satisfy direct retailer feasibility', () => {
+    insertEvidence({ url: 'https://epiceries.ca/developers', claim: 'Official documentation lists Maxi, Metro, IGA, Walmart, Super C and Giant Tiger as supported stores.', entity: 'epiceries.ca' })
+    ensureResearchChecklist(scope)
+    refreshResearchChecklist(scope)
+    expect(getResearchChecklistState(scope).filter((row) => row.requirement_id.startsWith('retailer_')).every((row) => row.status === 'PENDING')).toBe(true)
   })
 })

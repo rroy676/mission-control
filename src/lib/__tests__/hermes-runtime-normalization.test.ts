@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractHermesAction, extractHermesActions, normalizeHermesResponse, validateResearchTurn } from '@/lib/hermes-runtime'
+import { extractHermesAction, extractHermesActions, normalizeHermesResponse, validateResearchActionParameters, validateResearchTurn } from '@/lib/hermes-runtime'
 
 describe('Hermes response normalization', () => {
   it('classifies reasoning-only responses as incomplete', () => {
@@ -78,5 +78,14 @@ describe('Hermes response normalization', () => {
   it('rejects an action-generation response that exceeds the bounded size', () => {
     const response = `<mc_action>{"action":"SEARCH_WEB","parameters":{"query":"${'x'.repeat(12_000)}"}}</mc_action>`
     expect(validateResearchTurn(response)).toMatchObject({ valid: false, action: null })
+  })
+
+  it('marks missing evidence fields as one-time repairable parameter errors', () => {
+    expect(validateResearchActionParameters({ action: 'SAVE_RESEARCH_EVIDENCE', parameters: { url: 'https://epiceries.ca/developers' } })?.researchRepairable).toBe(true)
+    expect(validateResearchActionParameters({ action: 'SAVE_RESEARCH_EVIDENCE', parameters: { url: 'https://epiceries.ca/developers', claim: 'The official documentation identifies the public API.', summary: 'Documentation evidence.', source_id: 29 } })).toBeNull()
+  })
+
+  it('does not mark unsupported or authority-shaped actions as repairable', () => {
+    expect(validateResearchActionParameters({ action: 'UNSUPPORTED', parameters: { tenant_id: 99 } })).toBeNull()
   })
 })
