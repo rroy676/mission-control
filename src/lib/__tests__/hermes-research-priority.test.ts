@@ -72,8 +72,14 @@ describe('priority-aware resumable research checklist', () => {
   })
 
   it('advances after evidence satisfies the current requirement', () => {
+    expect(beginNextResearchRequirement(scope, 'run-1')?.id).toBe('epiceries_docs')
     insertEvidence({ url: 'https://epiceries.ca/developers', claim: 'Official API documentation describes an endpoint and response fields.', entity: 'epiceries.ca' })
-    expect(beginNextResearchRequirement(scope, 'run-1')?.id).toBe('epiceries_sample')
+    const next = beginNextResearchRequirement(scope, 'run-1')
+    const docs = getResearchChecklistState(scope).find((row) => row.requirement_id === 'epiceries_docs')
+    expect(docs).toMatchObject({ status: 'SATISFIED', claimed_by_run_id: null, claimed_at: null })
+    expect(JSON.parse(docs?.source_ids || '[]')).toEqual([1])
+    expect(JSON.parse(docs?.evidence_ids || '[]')).toEqual([1])
+    expect(next?.id).toBe('epiceries_sample')
   })
 
   it('skips explicitly blocked requirements and resumes the next one', () => {

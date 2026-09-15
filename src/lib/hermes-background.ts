@@ -6,7 +6,7 @@ import { readAuthorityShadowState } from './authority/state'
 import { buildHermesProjectContext, buildHermesResearchProjectContext, bindingForSession, createHermesTask, saveHermesMemory } from './hermes-coo'
 import { sendHermesBackgroundMessage } from './hermes-runtime'
 import { resolveEffectiveModel, type EffectiveModel } from './model-profiles'
-import { beginNextResearchRequirement, compactResearchContext, ensureResearchChecklist, fetchPublicJsonApi, fetchPublicUrl, recordResearchFailure, recoverStaleResearchClaims, recomputeResearchChecklist, researchChecklist, researchCounts, saveHermesEvidence, searchPublicWeb, HERMES_RESEARCH_LIMITS } from './hermes-research'
+import { beginNextResearchRequirement, compactResearchContext, ensureResearchChecklist, fetchPublicJsonApi, fetchPublicUrl, getResearchChecklistState, recordResearchFailure, recoverStaleResearchClaims, recomputeResearchChecklist, researchChecklist, researchCounts, saveHermesEvidence, searchPublicWeb, HERMES_RESEARCH_LIMITS } from './hermes-research'
 import type { User } from './auth'
 
 export const HERMES_BACKGROUND_LIMITS = {
@@ -147,6 +147,7 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
   let researchSearches = 0
   let researchFetches = 0
   let approvalId: string | null = null
+  let rejectedTaskResultStreak = 0
   const heartbeat = (activity: string) => updateRun(runId, { heartbeat_at: now(), last_meaningful_activity: activity })
 
   try {
@@ -206,6 +207,7 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
             return saveHermesMemory(user, binding, { title: String(params.title || '').slice(0, 240), content: String(params.content || '').slice(0, 20000), memory_type: (params.memory_type === 'current_state' || params.memory_type === 'product_context' || params.memory_type === 'operational_note') ? params.memory_type : 'operational_note' })
           }
           if (action.action === 'SEARCH_WEB') {
+            rejectedTaskResultStreak = 0
             researchSearches += 1
             if (researchSearches > HERMES_RESEARCH_LIMITS.maxSearches) throw new Error('Hermes research search limit exceeded')
             updateRun(runId, { research_stage: 'SEARCH', heartbeat_at: now() })
@@ -213,6 +215,7 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
             catch (error) { return { error: String(error instanceof Error ? error.message : error).slice(0, 300), query: String(params.query || '') } }
           }
           if (action.action === 'FETCH_PUBLIC_URL' || action.action === 'FETCH_PUBLIC_JSON_API') {
+            rejectedTaskResultStreak = 0
             researchFetches += 1
             if (researchFetches > HERMES_RESEARCH_LIMITS.maxFetches) throw new Error('Hermes research fetch limit exceeded')
             updateRun(runId, { research_stage: 'FETCH', heartbeat_at: now() })
@@ -221,6 +224,7 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
             catch (error) { const message = String(error instanceof Error ? error.message : error).slice(0, 300); const sourceId = recordResearchFailure(scope, String(params.url || ''), message); return { error: message, source_id: sourceId, url: String(params.url || '') } }
           }
           if (action.action === 'SAVE_RESEARCH_EVIDENCE') {
+            rejectedTaskResultStreak = 0
             updateRun(runId, { research_stage: 'ASSESS', heartbeat_at: now() })
             return saveHermesEvidence({ tenantId: task.tenant_id, workspaceId: task.workspace_id, projectId: task.project_id, taskId: task.id, runId }, {
               url: String(params.url || ''), title: String(params.title || ''), publisher: String(params.publisher || ''), claim: String(params.claim || ''), summary: String(params.summary || params.evidence_summary || ''), quote: typeof params.quote === 'string' ? params.quote : undefined, entity: typeof params.entity === 'string' ? params.entity : undefined, sourceId: Number.isInteger(Number(params.source_id)) ? Number(params.source_id) : undefined,
@@ -257,7 +261,13 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
             const resultText = String(params.result || params.resolution || '').trim().slice(0, 10000)
             if (!resultText) throw new Error('Task result is required')
             const counts = researchCounts({ tenantId: task.tenant_id, workspaceId: task.workspace_id, taskId: task.id, runId })
-            if (!meetsResearchCriteria(task, resultText, counts, runId)) return { task_id: task.id, status: 'in_progress', completion_rejected: true, reason: 'Required evidence-backed deliverables are incomplete', ...counts }
+            if (!meetsResearchCriteria(task, resultText, counts, runId)) {
+              rejectedTaskResultStreak += 1
+              const nextRequirement = getResearchChecklistState({ tenantId: task.tenant_id, workspaceId: task.workspace_id, projectId: task.project_id, taskId: task.id }).find((row) => row.status === 'PENDING' || row.status === 'IN_PROGRESS')?.requirement_id || null
+              if (rejectedTaskResultStreak >= 3) throw new Error(`Hermes research made no progress after repeated rejected UPDATE_TASK_RESULT; next requirement is ${nextRequirement || 'none'}`)
+              return { task_id: task.id, status: 'in_progress', completion_rejected: true, reason: 'Required evidence-backed deliverables are incomplete', next_requirement: nextRequirement, continue_research: true, ...counts }
+            }
+            rejectedTaskResultStreak = 0
             const requested = String(params.status || 'review')
             const status = requested === 'done' && parseMetadata(task.metadata).hermes_autonomous_completion === true ? 'done' : requested === 'blocked' ? 'blocked' : requested === 'awaiting_owner' ? 'awaiting_owner' : 'review'
             db.prepare('INSERT INTO comments (task_id,author,content,created_at,workspace_id) VALUES (?,?,?,?,?)').run(task.id, task.agent_name, resultText, now(), task.workspace_id)

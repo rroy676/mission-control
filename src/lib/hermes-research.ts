@@ -250,8 +250,10 @@ export function recomputeResearchChecklist(scope: Pick<Scope, 'tenantId' | 'work
         if (row.requirement_id === 'epiceries_schema') return isEpiceriesUrl(e.source_url) && /schema|field|product|price|response/i.test(text(e))
         return requirementMatches(requirement, [e], sources, refs, statuses)
       })
-    const preserveClaim = row.status === 'IN_PROGRESS'
-    const nextStatus: ResearchRequirementStatus = preserveClaim ? 'IN_PROGRESS' : matching ? 'SATISFIED' : (row.status === 'BLOCKED' || row.status === 'NOT_FOUND' ? row.status : 'PENDING')
+    // Contract completion is evaluated before ownership preservation. An
+    // active owner may finalize its own claim, but cannot override a proven
+    // SATISFIED result or make an unsatisfied result appear complete.
+    const nextStatus: ResearchRequirementStatus = matching ? 'SATISFIED' : row.status === 'IN_PROGRESS' ? 'IN_PROGRESS' : (row.status === 'BLOCKED' || row.status === 'NOT_FOUND' ? row.status : 'PENDING')
     const sourceIds = [...new Set([...matchingRows.map((e) => e.source_id).filter((id): id is number => Boolean(id)), ...(row.requirement_id === 'epiceries_fetch' && matching ? sources.filter((source) => source.fetch_outcome === 'SUCCESS' && source.http_status && isEpiceriesUrl(source.url)).map((source) => source.id) : [])])]
     const evidenceIds = matchingRows.map((e) => e.id)
     update.run(nextStatus, JSON.stringify(sourceIds), JSON.stringify(evidenceIds), nextStatus === 'IN_PROGRESS' ? row.claimed_by_run_id : null, nextStatus === 'IN_PROGRESS' ? row.claimed_at : null, scope.tenantId, scope.workspaceId, scope.projectId, scope.taskId, row.requirement_id)
