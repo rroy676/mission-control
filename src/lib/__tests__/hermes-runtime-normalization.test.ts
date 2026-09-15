@@ -48,8 +48,25 @@ describe('Hermes response normalization', () => {
     expect(validateResearchTurn('<mc_action>{"action":"SEARCH_WEB","parameters":{"query":"Quebec prices"}}</mc_action>')).toMatchObject({ valid: true, action: { action: 'SEARCH_WEB' } })
   })
 
+  it('normalizes the typed XML action form emitted by Hermes research turns', () => {
+    expect(validateResearchTurn('<mc_action type="SEARCH_WEB"><query>épiceries.ca developer API documentation</query></mc_action>')).toMatchObject({
+      valid: true,
+      action: { action: 'SEARCH_WEB', parameters: { query: 'épiceries.ca developer API documentation' } },
+    })
+    expect(validateResearchTurn('<mc_action type="SEARCH_WEB" query="épiceries.ca developer API" />')).toMatchObject({
+      valid: true,
+      action: { action: 'SEARCH_WEB', parameters: { query: 'épiceries.ca developer API' } },
+    })
+  })
+
   it('rejects a multi-action research response before execution', () => {
     const response = '<mc_action>{"action":"SEARCH_WEB","parameters":{"query":"one"}}</mc_action>\n<mc_action>{"action":"FETCH_PUBLIC_URL","parameters":{"url":"https://example.com"}}</mc_action>'
+    expect(validateResearchTurn(response)).toEqual({ valid: false, action: null, reason: 'research turn contained multiple actions' })
+  })
+
+  it('rejects multiple typed XML actions before execution', () => {
+    const response = '<mc_action type="SEARCH_WEB"><query>one</query></mc_action>\n<mc_action type="FETCH_PUBLIC_URL"><url>https://example.com</url></mc_action>'
+    expect(extractHermesActions(response)).toHaveLength(2)
     expect(validateResearchTurn(response)).toEqual({ valid: false, action: null, reason: 'research turn contained multiple actions' })
   })
 

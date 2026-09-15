@@ -1550,8 +1550,8 @@ const migrations: Migration[] = [
         db.exec(`ALTER TABLE agents ADD COLUMN claude_base_session_created_at TEXT DEFAULT NULL`)
       }
     }
-  }
-  ,{
+  },
+  {
     id: '056_tenant_memberships_context',
     up(db: Database.Database) {
       // Establish the v1.2 tenant identity without replacing the existing
@@ -2028,6 +2028,78 @@ const migrations: Migration[] = [
       ] as const
       const insert = db.prepare(`INSERT OR IGNORE INTO model_provider_catalog (provider_id, model_id, display_name, context_window, capabilities, pricing_metadata) VALUES (?, ?, ?, ?, ?, ?)`)
       for (const row of catalog) insert.run(...row)
+    }
+  }
+  ,{
+    id: '068_hermes_priority_research',
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS hermes_research_requirements (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id INTEGER NOT NULL,
+          workspace_id INTEGER NOT NULL,
+          project_id INTEGER NOT NULL,
+          task_id INTEGER NOT NULL,
+          requirement_id TEXT NOT NULL,
+          ordinal INTEGER NOT NULL,
+          phase TEXT NOT NULL,
+          label TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('PENDING','IN_PROGRESS','SATISFIED','BLOCKED','NOT_FOUND')) DEFAULT 'PENDING',
+          source_ids TEXT NOT NULL DEFAULT '[]',
+          evidence_ids TEXT NOT NULL DEFAULT '[]',
+          action_refs TEXT NOT NULL DEFAULT '[]',
+          updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          UNIQUE (tenant_id, workspace_id, project_id, task_id, requirement_id),
+          FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_hermes_research_requirements_scope
+          ON hermes_research_requirements(tenant_id,workspace_id,project_id,task_id,ordinal);
+
+        CREATE TABLE IF NOT EXISTS hermes_coo_run_turns (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          run_id TEXT NOT NULL,
+          tenant_id INTEGER NOT NULL,
+          workspace_id INTEGER NOT NULL,
+          project_id INTEGER NOT NULL,
+          task_id INTEGER NOT NULL,
+          turn_number INTEGER NOT NULL,
+          requirement_id TEXT,
+          input_tokens INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+          duration_ms INTEGER NOT NULL DEFAULT 0,
+          response_chars INTEGER NOT NULL DEFAULT 0,
+          action_type TEXT,
+          action_accepted INTEGER NOT NULL DEFAULT 0,
+          repair_count INTEGER NOT NULL DEFAULT 0,
+          context_chars INTEGER NOT NULL DEFAULT 0,
+          context_estimated_tokens INTEGER NOT NULL DEFAULT 0,
+          started_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          completed_at INTEGER,
+          UNIQUE (run_id, turn_number),
+          FOREIGN KEY (run_id) REFERENCES hermes_coo_runs(run_id) ON DELETE CASCADE,
+          FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_hermes_coo_run_turns_run ON hermes_coo_run_turns(run_id,turn_number);
+        ALTER TABLE hermes_coo_runs ADD COLUMN model_turn_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE hermes_coo_runs ADD COLUMN repair_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE hermes_coo_runs ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE hermes_coo_runs ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE hermes_coo_runs ADD COLUMN max_context_chars INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE hermes_coo_runs ADD COLUMN max_context_estimated_tokens INTEGER NOT NULL DEFAULT 0;
+      `)
+    }
+  },
+  {
+    id: '069_hermes_research_claim_recovery',
+    up(db) {
+      db.exec(`
+        ALTER TABLE hermes_research_requirements ADD COLUMN claimed_by_run_id TEXT;
+        ALTER TABLE hermes_research_requirements ADD COLUMN claimed_at INTEGER;
+        CREATE INDEX IF NOT EXISTS idx_hermes_research_requirements_claim ON hermes_research_requirements(status, claimed_by_run_id);
+      `)
     }
   }
 ]

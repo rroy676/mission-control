@@ -180,6 +180,18 @@ export function extractHermesAction(content: string): { action: string; paramete
     }
     return { action: actionName, parameters }
   } catch { return null }
+  const typed = content.match(/<mc_action\b([^>]*)>([\s\S]*?)<\/mc_action>/i) || content.match(/<mc_action\b([^>]*)\s*\/\s*>/i)
+  if (typed) {
+    const attributes: Record<string, string> = {}
+    for (const item of typed[1].matchAll(/([A-Za-z_][\w-]*)\s*=\s*["']([^"']*)["']/g)) attributes[item[1]] = item[2]
+    const actionName = attributes.type || attributes.action || attributes.name
+    if (!actionName || !['CREATE_TASK', 'SAVE_WORKING_MEMORY', 'REQUEST_CEO_APPROVAL', 'UPDATE_TASK_RESULT', 'SEARCH_WEB', 'FETCH_PUBLIC_URL', 'FETCH_PUBLIC_JSON_API', 'SAVE_RESEARCH_EVIDENCE'].includes(actionName)) return null
+    const parameters: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(attributes)) if (!['type', 'action', 'name'].includes(key)) parameters[key] = value
+    const body = typed[2] || ''
+    for (const item of body.matchAll(/<([A-Za-z_][\w-]*)>\s*([\s\S]*?)\s*<\/\1>/g)) parameters[item[1]] = item[2].trim()
+    return { action: actionName, parameters }
+  }
   const dsml = content.match(/<｜DSML｜tool_call>([\s\S]*?)<\/?｜DSML｜tool_call>/i)
   if (!dsml) return null
   const parameters: Record<string, unknown> = {}
@@ -203,7 +215,7 @@ export function extractHermesAction(content: string): { action: string; paramete
 
 export function extractHermesActions(content: string): Array<{ action: string; parameters: Record<string, unknown> }> {
   const actions: Array<{ action: string; parameters: Record<string, unknown> }> = []
-  const tagPattern = /<(?:mc_action|tool_call)>\s*([\s\S]*?)\s*<\/(?:mc_action|tool_call)>/gi
+  const tagPattern = /<(?:mc_action|tool_call)\b[^>]*(?:\/\s*>|>[\s\S]*?<\/(?:mc_action|tool_call)>)/gi
   for (const match of content.matchAll(tagPattern)) {
     const action = extractHermesAction(match[0])
     if (action) actions.push(action)
@@ -296,6 +308,8 @@ export async function sendHermesBackgroundMessage(input: {
   onHeartbeat?: (activity: string) => void
   maxIterations?: number
   researchRequired?: boolean
+  researchTurnPrompt?: (turnNumber: number) => { requirementId: string | null; message: string; systemMessage: string; contextChars: number; contextEstimatedTokens: number }
+  onResearchTurn?: (turn: { turnNumber: number; requirementId: string | null; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; durationMs: number; responseChars: number; actionType: string | null; actionAccepted: boolean; repairCount: number; contextChars: number; contextEstimatedTokens: number }) => void
 }) {
   const { sessionId } = await ensureHermesSession({
     tenantId: input.tenantId,
@@ -304,6 +318,9 @@ export async function sendHermesBackgroundMessage(input: {
     projectId: input.projectId,
     sessionId: input.sessionId,
   })
+  if (input.researchRequired) {
+    return sendStatelessHermesResearch(input, sessionId)
+  }
   const body = {
     message: input.message,
     system_message: input.systemMessage,
@@ -409,6 +426,90 @@ export async function sendHermesBackgroundMessage(input: {
     inputTokens: totalInput,
     outputTokens: totalOutput,
   }
+}
+
+function usageFromHermesBody(body: any) {
+  const usage = body?.usage || body?.meta?.usage || {}
+  return {
+    inputTokens: Number(usage.input_tokens ?? usage.prompt_tokens ?? 0),
+    outputTokens: Number(usage.output_tokens ?? usage.completion_tokens ?? 0),
+    cacheReadTokens: Number(usage.cache_read_input_tokens ?? usage.cache_read_tokens ?? 0),
+    cacheWriteTokens: Number(usage.cache_creation_input_tokens ?? usage.cache_write_tokens ?? 0),
+  }
+}
+
+function compactResearchResult(result: unknown): unknown {
+  if (!result || typeof result !== 'object') return result
+  if (Array.isArray(result)) return result.map(compactResearchResult)
+  const value = { ...(result as Record<string, unknown>) }
+  if (typeof value.text === 'string') {
+    const text = value.text
+    value.text = text.slice(0, 16_000)
+    value.text_truncated_for_next_turn = text.length > 16_000
+  }
+  return value
+}
+
+async function sendStatelessHermesResearch(input: Parameters<typeof sendHermesBackgroundMessage>[0], baseSessionId: string) {
+  const maxIterations = input.maxIterations || 6
+  let previousResult: unknown = null
+  let finalContent = ''
+  let lastAction: { action: string; parameters: Record<string, unknown> } | null = null
+  const actionResults: unknown[] = []
+  let totalInput = 0
+  let totalOutput = 0
+  let iterations = 0
+
+  while (iterations < maxIterations) {
+    iterations += 1
+    const prompt = input.researchTurnPrompt?.(iterations) || { requirementId: null, message: input.message, systemMessage: input.systemMessage, contextChars: 0, contextEstimatedTokens: 0 }
+    const turnSessionId = `${baseSessionId}_turn_${iterations}`
+    await ensureHermesSession({ tenantId: input.tenantId, workspaceId: input.workspaceId, agentId: input.agentId, projectId: input.projectId, sessionId: turnSessionId })
+    const message = previousResult === null
+      ? prompt.message
+      : `${prompt.message}\nPrevious bounded action result (server-compressed): ${JSON.stringify(compactResearchResult(previousResult))}`
+    const started = Date.now()
+    const result = await request(`/api/sessions/${encodeURIComponent(turnSessionId)}/chat`, {
+      method: 'POST',
+      body: JSON.stringify({ message, system_message: prompt.systemMessage, provider: input.provider, model: input.model, require_model_lock: true }),
+    }, [], BACKGROUND_PROJECT_CHAT_TIMEOUT_MS)
+    let normalized = normalizeHermesResponse(result.body)
+    if (!normalized.content) throw new HermesRuntimeError('invalid_response', 'Hermes returned an empty background response', 502)
+    let usage = usageFromHermesBody(result.body)
+    let repairCount = 0
+    let validation = validateResearchTurn(normalized.content)
+    if (!validation.valid) {
+      repairCount = 1
+      const repair = await request(`/api/sessions/${encodeURIComponent(turnSessionId)}/chat`, {
+        method: 'POST',
+        body: JSON.stringify({ message: `Protocol error: ${validation.reason}. Return exactly ONE valid mc_action and nothing else. Do not emit prose or a second action.`, system_message: 'This is the one allowed repair attempt for this research turn. Emit exactly one bounded <mc_action> JSON envelope, then stop.', provider: input.provider, model: input.model, require_model_lock: true }),
+      }, [], BACKGROUND_PROJECT_CHAT_TIMEOUT_MS)
+      normalized = normalizeHermesResponse(repair.body)
+      if (!normalized.content) throw new HermesRuntimeError('invalid_response', 'Hermes research repair returned an empty response', 502)
+      const repairUsage = usageFromHermesBody(repair.body)
+      usage = { inputTokens: usage.inputTokens + repairUsage.inputTokens, outputTokens: usage.outputTokens + repairUsage.outputTokens, cacheReadTokens: usage.cacheReadTokens + repairUsage.cacheReadTokens, cacheWriteTokens: usage.cacheWriteTokens + repairUsage.cacheWriteTokens }
+      validation = validateResearchTurn(normalized.content)
+      if (!validation.valid) throw new HermesRuntimeError('invalid_response', `Hermes research turn rejected: ${validation.reason}`, 502)
+    }
+    const action = validation.action!
+    input.onHeartbeat?.(`Executing bounded action ${action.action}`)
+    let actionResult: unknown
+    try {
+      actionResult = await input.onAction(action)
+    } catch (error) {
+      input.onResearchTurn?.({ turnNumber: iterations, requirementId: prompt.requirementId, ...usage, durationMs: Date.now() - started, responseChars: normalized.content.length, actionType: action.action, actionAccepted: false, repairCount, contextChars: prompt.contextChars, contextEstimatedTokens: prompt.contextEstimatedTokens })
+      throw error
+    }
+    input.onResearchTurn?.({ turnNumber: iterations, requirementId: prompt.requirementId, ...usage, durationMs: Date.now() - started, responseChars: normalized.content.length, actionType: action.action, actionAccepted: true, repairCount, contextChars: prompt.contextChars, contextEstimatedTokens: prompt.contextEstimatedTokens })
+    totalInput += usage.inputTokens
+    totalOutput += usage.outputTokens
+    actionResults.push(actionResult)
+    previousResult = actionResult
+    finalContent = normalized.content
+    lastAction = action
+  }
+
+  return { sessionId: baseSessionId, response: finalContent, actions: lastAction ? [lastAction] : [], actionResults, iterations, inputTokens: totalInput, outputTokens: totalOutput }
 }
 export function recordHermesInteraction(input: { workspaceId: number; tenantId: number; agentId: number; actor: string; message: string; response: string; sessionId: string; projectId?: number | null }) {
   const db = getDatabase(), detail = { runtime: 'hermes', tenant_id: input.tenantId, project_id: input.projectId ?? null, session_id: input.sessionId, message_length: input.message.length, response_length: input.response.length }

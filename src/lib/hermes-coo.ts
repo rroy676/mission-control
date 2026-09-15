@@ -55,6 +55,14 @@ export async function buildHermesProjectContext(user: User, projectId: number) {
   }
 }
 
+export function buildHermesResearchProjectContext(user: User, projectId: number) {
+  const project = resolveHermesProject(user, projectId)
+  return {
+    project: { id: project.id, name: project.name, slug: project.slug, description: project.description },
+    binding: { tenant_id: user.tenant_id, workspace_id: user.workspace_id, project_id: project.id },
+  }
+}
+
 export function bindingForSession(user: User, sessionId: string): HermesBinding {
   const db = getDatabase()
   const normalizedSessionId = sessionId.startsWith('hermes:') ? sessionId.slice('hermes:'.length) : sessionId

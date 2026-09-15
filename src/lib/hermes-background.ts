@@ -3,10 +3,10 @@ import { getDatabase, db_helpers, logAuditEvent } from './db'
 import { eventBus } from './event-bus'
 import { logger } from './logger'
 import { readAuthorityShadowState } from './authority/state'
-import { buildHermesProjectContext, bindingForSession, createHermesTask, saveHermesMemory } from './hermes-coo'
+import { buildHermesProjectContext, buildHermesResearchProjectContext, bindingForSession, createHermesTask, saveHermesMemory } from './hermes-coo'
 import { sendHermesBackgroundMessage } from './hermes-runtime'
 import { resolveEffectiveModel, type EffectiveModel } from './model-profiles'
-import { fetchPublicJsonApi, fetchPublicUrl, recordResearchFailure, researchChecklist, researchCounts, saveHermesEvidence, searchPublicWeb, HERMES_RESEARCH_LIMITS } from './hermes-research'
+import { beginNextResearchRequirement, compactResearchContext, ensureResearchChecklist, fetchPublicJsonApi, fetchPublicUrl, recordResearchFailure, recoverStaleResearchClaims, researchChecklist, researchCounts, saveHermesEvidence, searchPublicWeb, HERMES_RESEARCH_LIMITS } from './hermes-research'
 import type { User } from './auth'
 
 export const HERMES_BACKGROUND_LIMITS = {
@@ -68,7 +68,7 @@ function tenantModel(tenantId: number, agentId: number, researchRequired = false
 
 function updateRun(runId: string, fields: Record<string, unknown>) {
   const db = getDatabase()
-  const allowed = new Set(['status', 'heartbeat_at', 'completed_at', 'provider_id', 'model_id', 'model_profile_id', 'input_tokens', 'output_tokens', 'cost_usd', 'last_meaningful_activity', 'stop_reason', 'error_classification', 'approval_id', 'action_count', 'research_stage', 'research_iterations', 'research_source_count', 'evidence_count'])
+  const allowed = new Set(['status', 'heartbeat_at', 'completed_at', 'provider_id', 'model_id', 'model_profile_id', 'input_tokens', 'output_tokens', 'cost_usd', 'last_meaningful_activity', 'stop_reason', 'error_classification', 'approval_id', 'action_count', 'research_stage', 'research_iterations', 'research_source_count', 'evidence_count', 'model_turn_count', 'repair_count', 'cache_read_tokens', 'cache_write_tokens', 'max_context_chars', 'max_context_estimated_tokens'])
   const entries = Object.entries(fields).filter(([key]) => allowed.has(key))
   if (!entries.length) return
   db.prepare(`UPDATE hermes_coo_runs SET ${entries.map(([key]) => `${key} = ?`).join(', ')} WHERE run_id = ?`).run(...entries.map(([, value]) => value), runId)
@@ -150,17 +150,52 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
   const heartbeat = (activity: string) => updateRun(runId, { heartbeat_at: now(), last_meaningful_activity: activity })
 
   try {
-    const context = await buildHermesProjectContext(user, task.project_id)
-    const metadata = parseMetadata(task.metadata)
     const research = requiresResearch(task)
-    const systemMessage = `Mission Control background COO execution. You are operating only on the server-authorized tenant ${task.tenant_id}, project ${task.project_id}, task ${task.id}. No shell, PTY, process spawn, credentials, filesystem mutation, financial action, deployment, or architecture change is available. ${research ? `This is an evidence-first research task. You MUST perform research before writing prose. Available exact action envelopes are: <mc_action>{"action":"SEARCH_WEB","parameters":{"query":"..."}}</mc_action>, <mc_action>{"action":"FETCH_PUBLIC_URL","parameters":{"url":"https://..."}}</mc_action>, <mc_action>{"action":"FETCH_PUBLIC_JSON_API","parameters":{"url":"https://..."}}</mc_action>, and <mc_action>{"action":"SAVE_RESEARCH_EVIDENCE","parameters":{"url":"https://...","title":"...","claim":"...","summary":"...","classification":"VERIFIED|INFERRED|UNVERIFIED|CONFLICTING","confidence":"high|medium|low"}}</mc_action>. Emit exactly ONE action envelope in this turn and then stop immediately after its closing </mc_action> tag. Do not emit a plan, prose, or a second action. Mission Control will execute the action and provide the next turn. Inspect sources, preserve exact URLs, dates and evidence, and label each material claim VERIFIED, INFERRED, UNVERIFIED, or CONFLICTING. Do not invent access, legal, licensing, or commercial conclusions. Required outputs must cite saved evidence.` : ''} You may emit only these bounded actions: SAVE_WORKING_MEMORY, CREATE_TASK (must be assigned to yourself), UPDATE_TASK_RESULT (current task only), REQUEST_CEO_APPROVAL, SEARCH_WEB, FETCH_PUBLIC_URL, FETCH_PUBLIC_JSON_API, SAVE_RESEARCH_EVIDENCE. Do not create follow-up tasks unless strictly required by the task and never create more than one. Project context: ${JSON.stringify(context)}\nTask: ${JSON.stringify({ id: task.id, title: task.title, description: task.description, priority: task.priority })}`
+    const context = research ? buildHermesResearchProjectContext(user, task.project_id) : await buildHermesProjectContext(user, task.project_id)
+    const metadata = parseMetadata(task.metadata)
+    const scope = { tenantId: task.tenant_id, workspaceId: task.workspace_id, projectId: task.project_id, taskId: task.id }
+    if (research) ensureResearchChecklist(scope)
+    const baseSystemMessage = `Mission Control background COO execution. You are operating only on the server-authorized tenant ${task.tenant_id}, project ${task.project_id}, task ${task.id}. No shell, PTY, process spawn, credentials, filesystem mutation, financial action, deployment, or architecture change is available. ${research ? 'This is an evidence-first research task. Complete only the current server-selected objective. Do not silently skip it. Use exactly one bounded action in this turn and stop immediately after its closing </mc_action> tag. Do not emit a plan or prose. Preserve exact URLs, dates, and evidence classifications; do not invent access, legal, licensing, or commercial conclusions.' : ''} You may emit only these bounded actions: SAVE_WORKING_MEMORY, CREATE_TASK (must be assigned to yourself), UPDATE_TASK_RESULT (current task only), REQUEST_CEO_APPROVAL, SEARCH_WEB, FETCH_PUBLIC_URL, FETCH_PUBLIC_JSON_API, SAVE_RESEARCH_EVIDENCE. Do not create follow-up tasks unless strictly required by the task and never create more than one. Project context: ${JSON.stringify(context)}\nTask: ${JSON.stringify({ id: task.id, title: task.title, description: task.description, priority: task.priority })}`
+    let researchTurnCount = 0
+    let researchRepairCount = 0
+    let researchCacheRead = 0
+    let researchCacheWrite = 0
+    let researchMaxContextChars = 0
+    let researchMaxContextTokens = 0
     let timeout: ReturnType<typeof setTimeout> | undefined
     const result = await Promise.race([
       sendHermesBackgroundMessage({
         tenantId: task.tenant_id, workspaceId: task.workspace_id, agentId: task.agent_id, projectId: task.project_id,
         sessionId, message: `Execute the bounded task. Work only within the supplied context. Save useful working memory when appropriate, write a concise result, and use UPDATE_TASK_RESULT for the current task when finished.`,
-        systemMessage, provider: model.provider_id, model: model.model_id, onHeartbeat: heartbeat,
+        systemMessage: baseSystemMessage, provider: model.provider_id, model: model.model_id, onHeartbeat: heartbeat,
         researchRequired: research, maxIterations: HERMES_RESEARCH_LIMITS.maxIterations,
+        researchTurnPrompt: research ? (turnNumber) => {
+          const requirement = beginNextResearchRequirement(scope, runId)
+          const compact = compactResearchContext(scope, runId)
+          const contextJson = JSON.stringify(compact)
+          const objective = requirement?.objective || 'Synthesize the evidence-backed final deliverable from the persisted checklist.'
+          return {
+            requirementId: requirement?.id || null,
+            contextChars: contextJson.length,
+            contextEstimatedTokens: Math.ceil(contextJson.length / 4),
+            systemMessage: `${baseSystemMessage}\nCURRENT OBJECTIVE (server-selected, turn ${turnNumber}): ${objective}\nCompact research state: ${contextJson}`,
+            message: `Advance only the current server-selected research objective: ${objective}. Use one bounded action now. The compact server state is: ${contextJson}`,
+          }
+        } : undefined,
+        onResearchTurn: research ? (turn) => {
+          const turnDb = getDatabase()
+          const result = turnDb.prepare(`INSERT INTO hermes_coo_run_turns
+            (run_id,tenant_id,workspace_id,project_id,task_id,turn_number,requirement_id,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,duration_ms,response_chars,action_type,action_accepted,repair_count,context_chars,context_estimated_tokens,started_at,completed_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch(),unixepoch())`).run(runId, task.tenant_id, task.workspace_id, task.project_id, task.id, turn.turnNumber, turn.requirementId, turn.inputTokens, turn.outputTokens, turn.cacheReadTokens, turn.cacheWriteTokens, turn.durationMs, turn.responseChars, turn.actionType, turn.actionAccepted ? 1 : 0, turn.repairCount, turn.contextChars, turn.contextEstimatedTokens)
+          if (turn.requirementId) turnDb.prepare(`UPDATE hermes_research_requirements SET action_refs=json_insert(COALESCE(action_refs,'[]'),'$[#]',?), updated_at=unixepoch() WHERE tenant_id=? AND workspace_id=? AND project_id=? AND task_id=? AND requirement_id=?`).run(JSON.stringify({ run_id: runId, turn_id: Number(result.lastInsertRowid), action: turn.actionType, accepted: turn.actionAccepted }), task.tenant_id, task.workspace_id, task.project_id, task.id, turn.requirementId)
+          researchTurnCount += 1
+          researchRepairCount += turn.repairCount
+          researchCacheRead += turn.cacheReadTokens
+          researchCacheWrite += turn.cacheWriteTokens
+          researchMaxContextChars = Math.max(researchMaxContextChars, turn.contextChars)
+          researchMaxContextTokens = Math.max(researchMaxContextTokens, turn.contextEstimatedTokens)
+          updateRun(runId, { model_turn_count: researchTurnCount, repair_count: researchRepairCount, cache_read_tokens: researchCacheRead, cache_write_tokens: researchCacheWrite, max_context_chars: researchMaxContextChars, max_context_estimated_tokens: researchMaxContextTokens })
+        } : undefined,
         onAction: async (action) => {
           if (isPaused()) throw new Error('Mission Control is PAUSED')
           actionCount += 1
@@ -263,6 +298,7 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
 export async function runHermesBackgroundTick(): Promise<{ ok: boolean; message: string }> {
   const db = getDatabase()
   const timestamp = now()
+  recoverStaleResearchClaims()
   const stale = db.prepare("SELECT run_id, task_id, workspace_id, tenant_id FROM hermes_coo_runs WHERE status = 'RUNNING' AND heartbeat_at < ?").all(timestamp - HERMES_BACKGROUND_LIMITS.staleAfterSeconds) as any[]
   for (const run of stale) {
     updateRun(run.run_id, { status: 'INTERRUPTED', completed_at: timestamp, stop_reason: 'stale heartbeat after Mission Control restart', error_classification: 'interrupted', last_meaningful_activity: 'Run interrupted during restart recovery' })
@@ -290,6 +326,7 @@ export async function runHermesBackgroundTick(): Promise<{ ok: boolean; message:
 
 export function getHermesBackgroundStatus(workspaceId?: number) {
   const db = getDatabase()
+  recoverStaleResearchClaims()
   const where = workspaceId ? 'AND workspace_id = ?' : ''
   const params = workspaceId ? [workspaceId] : []
   const active = db.prepare(`SELECT r.*, (SELECT COUNT(*) FROM hermes_research_sources s WHERE s.run_id=r.run_id AND s.tenant_id=r.tenant_id) AS research_source_count, (SELECT COUNT(*) FROM hermes_research_evidence e WHERE e.run_id=r.run_id AND e.tenant_id=r.tenant_id) AS evidence_count FROM hermes_coo_runs r WHERE r.status IN ('QUEUED','RUNNING','WAITING_FOR_CEO') ${where.replaceAll('workspace_id', 'r.workspace_id')} ORDER BY r.started_at DESC LIMIT 1`).get(...params) as any
