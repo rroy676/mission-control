@@ -8,6 +8,13 @@ import type { User } from '@/lib/auth'
 
 const REQUEST_TIMEOUT_MS = 15_000
 const PROJECT_CHAT_TIMEOUT_MS = 30_000
+// Background research turns may include a provider reasoning phase before
+// emitting the next bounded action. Keep ordinary project chat at 30s, while
+// giving this already wall-clock-bounded runner a finite transport budget.
+const BACKGROUND_PROJECT_CHAT_TIMEOUT_MS = 120_000
+const MAX_RESEARCH_ACTION_RESPONSE_CHARS = 12_000
+const MAX_RESEARCH_FINAL_RESPONSE_CHARS = 60_000
+const MAX_RESEARCH_ACTION_PAYLOAD_CHARS = 8_000
 export type HermesErrorCode = 'not_configured' | 'unavailable' | 'authentication' | 'session' | 'invalid_response' | 'provider_error' | 'timeout'
 export class HermesRuntimeError extends Error {
   constructor(public readonly code: HermesErrorCode, message: string, public readonly status = 503) { super(message); this.name = 'HermesRuntimeError' }
@@ -206,6 +213,26 @@ export function extractHermesActions(content: string): Array<{ action: string; p
   return single ? [single] : []
 }
 
+export type ResearchTurnValidation = {
+  valid: boolean
+  action: { action: string; parameters: Record<string, unknown> } | null
+  reason?: string
+}
+
+/**
+ * Research turns are single-action protocol messages. Keeping this contract
+ * at the runtime boundary prevents a model response from batching work or
+ * hiding an oversized action batch behind otherwise valid prose.
+ */
+export function validateResearchTurn(content: string, terminal = false): ResearchTurnValidation {
+  const maxChars = terminal ? MAX_RESEARCH_FINAL_RESPONSE_CHARS : MAX_RESEARCH_ACTION_RESPONSE_CHARS
+  if (content.length > maxChars) return { valid: false, action: null, reason: `research response exceeded ${maxChars} characters` }
+  const actions = extractHermesActions(content)
+  if (actions.length !== 1) return { valid: false, action: null, reason: actions.length === 0 ? 'research turn must contain exactly one action' : 'research turn contained multiple actions' }
+  if (JSON.stringify(actions[0]).length > MAX_RESEARCH_ACTION_PAYLOAD_CHARS) return { valid: false, action: null, reason: `research action exceeded ${MAX_RESEARCH_ACTION_PAYLOAD_CHARS} characters` }
+  return { valid: true, action: actions[0] }
+}
+
 export async function sendHermesMessage(input: { tenantId: number; workspaceId: number; agentId: number; projectId?: number | null; sessionId?: string; message: string; systemMessage?: string; actor: string; actorUser?: User }) {
   const db = getDatabase(), projectId = input.projectId ?? null
   const { sessionId } = await ensureHermesSession(input)
@@ -288,11 +315,33 @@ export async function sendHermesBackgroundMessage(input: {
   const result = await request(`/api/sessions/${encodeURIComponent(sessionId)}/chat`, {
     method: 'POST',
     body: JSON.stringify(body),
-  }, [], PROJECT_CHAT_TIMEOUT_MS)
+  }, [], BACKGROUND_PROJECT_CHAT_TIMEOUT_MS)
   let normalized = normalizeHermesResponse(result.body)
   if (!normalized.content) throw new HermesRuntimeError('invalid_response', 'Hermes returned an empty background response', 502)
   const firstUsage = result.body?.usage || result.body?.meta?.usage || {}
   let actions = extractHermesActions(normalized.content)
+  if (input.researchRequired) {
+    let validation = validateResearchTurn(normalized.content)
+    if (!validation.valid) {
+      const repair = await request(`/api/sessions/${encodeURIComponent(sessionId)}/chat`, {
+        method: 'POST',
+        body: JSON.stringify({
+          message: `Protocol error: ${validation.reason}. Return exactly ONE valid mc_action and nothing else. Do not emit prose or a second action.`,
+          system_message: 'This is the one allowed repair attempt for this research turn. Emit exactly one bounded <mc_action> JSON envelope, then stop.',
+          provider: input.provider,
+          model: input.model,
+          require_model_lock: true,
+        }),
+      }, [], BACKGROUND_PROJECT_CHAT_TIMEOUT_MS)
+      normalized = normalizeHermesResponse(repair.body)
+      if (!normalized.content) throw new HermesRuntimeError('invalid_response', 'Hermes research repair returned an empty response', 502)
+      validation = validateResearchTurn(normalized.content)
+      if (!validation.valid) throw new HermesRuntimeError('invalid_response', `Hermes research turn rejected: ${validation.reason}`, 502)
+      actions = [validation.action!]
+    } else {
+      actions = [validation.action!]
+    }
+  }
   const actionResults: unknown[] = []
   let iterations = 1
   let totalInput = Number(firstUsage.input_tokens ?? firstUsage.prompt_tokens ?? 0)
@@ -315,13 +364,35 @@ export async function sendHermesBackgroundMessage(input: {
             ? 'The search succeeded. You MUST now emit FETCH_PUBLIC_URL or FETCH_PUBLIC_JSON_API for relevant results, beginning with the official documentation or API URL. Emit the exact action envelope; do not write prose.'
             : 'Continue the bounded research loop. If required evidence or deliverables are missing, emit the next bounded research action. Otherwise emit UPDATE_TASK_RESULT with the complete evidence-backed result. Do not claim a fact without a saved source reference.',
       }),
-    }, [], PROJECT_CHAT_TIMEOUT_MS)
+    }, [], BACKGROUND_PROJECT_CHAT_TIMEOUT_MS)
     normalized = normalizeHermesResponse(followup.body)
     if (!normalized.content) throw new HermesRuntimeError('invalid_response', 'Hermes returned an empty background follow-up', 502)
     const followupUsage = followup.body?.usage || followup.body?.meta?.usage || {}
     totalInput += Number(followupUsage.input_tokens ?? followupUsage.prompt_tokens ?? 0)
     totalOutput += Number(followupUsage.output_tokens ?? followupUsage.completion_tokens ?? 0)
-    const nextActions = extractHermesActions(normalized.content)
+    let nextActions = extractHermesActions(normalized.content)
+    if (input.researchRequired) {
+      let validation = validateResearchTurn(normalized.content)
+      if (!validation.valid) {
+        const repair = await request(`/api/sessions/${encodeURIComponent(sessionId)}/chat`, {
+          method: 'POST',
+          body: JSON.stringify({
+            message: `Protocol error: ${validation.reason}. Return exactly ONE valid mc_action and nothing else. Do not emit prose or a second action.`,
+            system_message: 'This is the one allowed repair attempt for this research turn. Emit exactly one bounded <mc_action> JSON envelope, then stop.',
+            provider: input.provider,
+            model: input.model,
+            require_model_lock: true,
+          }),
+        }, [], BACKGROUND_PROJECT_CHAT_TIMEOUT_MS)
+        normalized = normalizeHermesResponse(repair.body)
+        if (!normalized.content) throw new HermesRuntimeError('invalid_response', 'Hermes research repair returned an empty response', 502)
+        validation = validateResearchTurn(normalized.content)
+        if (!validation.valid) throw new HermesRuntimeError('invalid_response', `Hermes research turn rejected: ${validation.reason}`, 502)
+        nextActions = [validation.action!]
+      } else {
+        nextActions = [validation.action!]
+      }
+    }
     if (!nextActions.length) {
       if (input.researchRequired) { actions = []; continue }
       break

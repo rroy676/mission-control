@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractHermesAction, extractHermesActions, normalizeHermesResponse } from '@/lib/hermes-runtime'
+import { extractHermesAction, extractHermesActions, normalizeHermesResponse, validateResearchTurn } from '@/lib/hermes-runtime'
 
 describe('Hermes response normalization', () => {
   it('classifies reasoning-only responses as incomplete', () => {
@@ -42,5 +42,24 @@ describe('Hermes response normalization', () => {
       { action: 'CREATE_TASK', parameters: { title: 'A', objective: 'OA' } },
       { action: 'CREATE_TASK', parameters: { title: 'B', objective: 'OB' } },
     ])
+  })
+
+  it('accepts exactly one research action', () => {
+    expect(validateResearchTurn('<mc_action>{"action":"SEARCH_WEB","parameters":{"query":"Quebec prices"}}</mc_action>')).toMatchObject({ valid: true, action: { action: 'SEARCH_WEB' } })
+  })
+
+  it('rejects a multi-action research response before execution', () => {
+    const response = '<mc_action>{"action":"SEARCH_WEB","parameters":{"query":"one"}}</mc_action>\n<mc_action>{"action":"FETCH_PUBLIC_URL","parameters":{"url":"https://example.com"}}</mc_action>'
+    expect(validateResearchTurn(response)).toEqual({ valid: false, action: null, reason: 'research turn contained multiple actions' })
+  })
+
+  it('rejects a large 201-action-style response without selecting a prefix', () => {
+    const response = Array.from({ length: 201 }, (_, i) => `<mc_action>{"action":"SEARCH_WEB","parameters":{"query":"q${i}"}}</mc_action>`).join('\n')
+    expect(validateResearchTurn(response)).toMatchObject({ valid: false, action: null })
+  })
+
+  it('rejects an action-generation response that exceeds the bounded size', () => {
+    const response = `<mc_action>{"action":"SEARCH_WEB","parameters":{"query":"${'x'.repeat(12_000)}"}}</mc_action>`
+    expect(validateResearchTurn(response)).toMatchObject({ valid: false, action: null })
   })
 })

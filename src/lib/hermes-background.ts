@@ -57,11 +57,13 @@ function backgroundUser(tenantId: number, workspaceId: number): User {
   }
 }
 
-function tenantModel(tenantId: number, agentId: number, db = getDatabase()): EffectiveModel | null {
+function tenantModel(tenantId: number, agentId: number, researchRequired = false, db = getDatabase()): EffectiveModel | null {
   const tenant = db.prepare('SELECT id, tenant_key, slug, display_name, status FROM tenants WHERE id = ?').get(tenantId) as any
   if (!tenant || tenant.status === 'decommissioned') return null
-  return resolveEffectiveModel({ id: tenant.id, tenantKey: tenant.tenant_key, slug: tenant.slug, displayName: tenant.display_name, status: tenant.status, membershipRole: 'owner', userId: 0 }, { agentId, purpose: 'task' }, db)
-    || resolveEffectiveModel({ id: tenant.id, tenantKey: tenant.tenant_key, slug: tenant.slug, displayName: tenant.display_name, status: tenant.status, membershipRole: 'owner', userId: 0 }, { agentId, purpose: 'general' }, db)
+  const context = { id: tenant.id, tenantKey: tenant.tenant_key, slug: tenant.slug, displayName: tenant.display_name, status: tenant.status, membershipRole: 'owner' as const, userId: 0 }
+  return (researchRequired ? resolveEffectiveModel(context, { agentId, purpose: 'research' }, db) : null)
+    || resolveEffectiveModel(context, { agentId, purpose: 'task' }, db)
+    || resolveEffectiveModel(context, { agentId, purpose: 'general' }, db)
 }
 
 function updateRun(runId: string, fields: Record<string, unknown>) {
@@ -112,7 +114,7 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
   const runId = randomUUID()
   const correlationId = `hermes-coo:${task.id}:${runId}`
   const start = now()
-  const model = tenantModel(task.tenant_id, task.agent_id, db)
+  const model = tenantModel(task.tenant_id, task.agent_id, requiresResearch(task), db)
   if (!model) {
     markTask(db, task.id, task.workspace_id, 'blocked', 'Hermes background task blocked: no approved model profile')
     return { ok: false, message: `Task ${task.id} blocked: no approved Hermes model profile` }
@@ -135,7 +137,7 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
     const context = await buildHermesProjectContext(user, task.project_id)
     const metadata = parseMetadata(task.metadata)
     const research = requiresResearch(task)
-    const systemMessage = `Mission Control background COO execution. You are operating only on the server-authorized tenant ${task.tenant_id}, project ${task.project_id}, task ${task.id}. No shell, PTY, process spawn, credentials, filesystem mutation, financial action, deployment, or architecture change is available. ${research ? `This is an evidence-first research task. You MUST perform research before writing prose. Available exact action envelopes are: <mc_action>{"action":"SEARCH_WEB","parameters":{"query":"..."}}</mc_action>, <mc_action>{"action":"FETCH_PUBLIC_URL","parameters":{"url":"https://..."}}</mc_action>, <mc_action>{"action":"FETCH_PUBLIC_JSON_API","parameters":{"url":"https://..."}}</mc_action>, and <mc_action>{"action":"SAVE_RESEARCH_EVIDENCE","parameters":{"url":"https://...","title":"...","claim":"...","summary":"...","classification":"VERIFIED|INFERRED|UNVERIFIED|CONFLICTING","confidence":"high|medium|low"}}</mc_action>. Emit one or more of these exact actions now, then continue after tool results. Inspect sources, preserve exact URLs, dates and evidence, and label each material claim VERIFIED, INFERRED, UNVERIFIED, or CONFLICTING. Do not invent access, legal, licensing, or commercial conclusions. Required outputs must cite saved evidence.` : ''} You may emit only these bounded actions: SAVE_WORKING_MEMORY, CREATE_TASK (must be assigned to yourself), UPDATE_TASK_RESULT (current task only), REQUEST_CEO_APPROVAL, SEARCH_WEB, FETCH_PUBLIC_URL, FETCH_PUBLIC_JSON_API, SAVE_RESEARCH_EVIDENCE. Do not create follow-up tasks unless strictly required by the task and never create more than one. Project context: ${JSON.stringify(context)}\nTask: ${JSON.stringify({ id: task.id, title: task.title, description: task.description, priority: task.priority })}`
+    const systemMessage = `Mission Control background COO execution. You are operating only on the server-authorized tenant ${task.tenant_id}, project ${task.project_id}, task ${task.id}. No shell, PTY, process spawn, credentials, filesystem mutation, financial action, deployment, or architecture change is available. ${research ? `This is an evidence-first research task. You MUST perform research before writing prose. Available exact action envelopes are: <mc_action>{"action":"SEARCH_WEB","parameters":{"query":"..."}}</mc_action>, <mc_action>{"action":"FETCH_PUBLIC_URL","parameters":{"url":"https://..."}}</mc_action>, <mc_action>{"action":"FETCH_PUBLIC_JSON_API","parameters":{"url":"https://..."}}</mc_action>, and <mc_action>{"action":"SAVE_RESEARCH_EVIDENCE","parameters":{"url":"https://...","title":"...","claim":"...","summary":"...","classification":"VERIFIED|INFERRED|UNVERIFIED|CONFLICTING","confidence":"high|medium|low"}}</mc_action>. Emit exactly ONE action envelope in this turn and then stop immediately after its closing </mc_action> tag. Do not emit a plan, prose, or a second action. Mission Control will execute the action and provide the next turn. Inspect sources, preserve exact URLs, dates and evidence, and label each material claim VERIFIED, INFERRED, UNVERIFIED, or CONFLICTING. Do not invent access, legal, licensing, or commercial conclusions. Required outputs must cite saved evidence.` : ''} You may emit only these bounded actions: SAVE_WORKING_MEMORY, CREATE_TASK (must be assigned to yourself), UPDATE_TASK_RESULT (current task only), REQUEST_CEO_APPROVAL, SEARCH_WEB, FETCH_PUBLIC_URL, FETCH_PUBLIC_JSON_API, SAVE_RESEARCH_EVIDENCE. Do not create follow-up tasks unless strictly required by the task and never create more than one. Project context: ${JSON.stringify(context)}\nTask: ${JSON.stringify({ id: task.id, title: task.title, description: task.description, priority: task.priority })}`
     let timeout: ReturnType<typeof setTimeout> | undefined
     const result = await Promise.race([
       sendHermesBackgroundMessage({

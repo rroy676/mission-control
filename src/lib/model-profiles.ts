@@ -5,7 +5,7 @@ import type { User } from '@/lib/auth'
 import { requireTenantContext, type TenantContext, type TenantMembershipRole } from '@/lib/tenant-context'
 
 export type ProfileScope = 'tenant-default' | 'agent-override' | 'workflow-override' | 'task-override'
-export type ProfilePurpose = 'general' | 'engineering' | 'chat' | 'workflow' | 'task'
+export type ProfilePurpose = 'general' | 'engineering' | 'chat' | 'workflow' | 'task' | 'research'
 
 export interface ModelCatalogEntry {
   provider_id: string
@@ -131,7 +131,7 @@ export function saveProfile(context: TenantContext, input: Partial<ModelProfile>
   const scope = (input.scope || 'tenant-default') as ProfileScope
   const purpose = (input.purpose || 'general') as ProfilePurpose
   if (!provider || !model || !['tenant-default', 'agent-override', 'workflow-override', 'task-override'].includes(scope)) throw new Error('Invalid model profile')
-  if (!['general', 'engineering', 'chat', 'workflow', 'task'].includes(purpose)) throw new Error('Invalid profile purpose')
+  if (!['general', 'engineering', 'chat', 'workflow', 'task', 'research'].includes(purpose)) throw new Error('Invalid profile purpose')
   const catalog = catalogEntry(db, provider, model)
   if (!catalog || !catalog.enabled_globally || catalog.deprecated) throw new Error('Model is not globally allowed')
   const now = Math.floor(Date.now() / 1000)

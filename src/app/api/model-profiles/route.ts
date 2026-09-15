@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { recordTenantAuthorizationDecision } from '@/lib/tenant-context'
 
 const profileInput = z.object({
-  provider_id: z.string().min(1).max(120), model_id: z.string().min(1).max(200), purpose: z.enum(['general', 'engineering', 'chat', 'workflow', 'task']).optional(),
+  provider_id: z.string().min(1).max(120), model_id: z.string().min(1).max(200), purpose: z.enum(['general', 'engineering', 'chat', 'workflow', 'task', 'research']).optional(),
   scope: z.enum(['tenant-default', 'agent-override', 'workflow-override', 'task-override']).optional(), agent_id: z.number().int().positive().nullable().optional(),
   workflow_id: z.number().int().positive().nullable().optional(), task_id: z.number().int().positive().nullable().optional(), enabled: z.boolean().optional(),
   priority: z.number().int().min(0).max(100000).optional(), credential_ref: z.string().max(120).nullable().optional(), fallback_profile_id: z.number().int().positive().nullable().optional(),

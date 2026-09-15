@@ -25,8 +25,8 @@ beforeEach(() => {
 
 afterEach(() => db.close())
 
-function profile(tenantId: number, id: number, model: string, scope = 'tenant-default', agentId: number | null = null, fallback: number | null = null): void {
-  db.prepare(`INSERT INTO tenant_model_profiles (id,tenant_id,provider_id,model_id,purpose,scope,agent_id,enabled,priority,credential_ref,fallback_profile_id,promotional_free,effective_from,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,unixepoch(),unixepoch(),unixepoch())`).run(id, tenantId, model.split('/')[0], model.split('/').slice(1).join('/'), 'general', scope, agentId, 1, 10, null, fallback, 0)
+function profile(tenantId: number, id: number, model: string, scope = 'tenant-default', agentId: number | null = null, fallback: number | null = null, purpose = 'general'): void {
+  db.prepare(`INSERT INTO tenant_model_profiles (id,tenant_id,provider_id,model_id,purpose,scope,agent_id,enabled,priority,credential_ref,fallback_profile_id,promotional_free,effective_from,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,unixepoch(),unixepoch(),unixepoch())`).run(id, tenantId, model.split('/')[0], model.split('/').slice(1).join('/'), purpose, scope, agentId, 1, 10, null, fallback, 0)
 }
 
 describe('tenant model profile isolation and resolution', () => {
@@ -53,5 +53,13 @@ describe('tenant model profile isolation and resolution', () => {
     createCredentialReference(alpha, 'openrouter', 'alpha/openrouter/secondary', db)
     const created = saveProfile(alpha, { provider_id: 'openrouter', model_id: 'openai/gpt-4.1-mini', credential_ref: 'alpha/openrouter/secondary' }, db)
     expect((created as ModelProfile).tenant_id).toBe(1)
+  })
+
+  it('resolves research profiles without changing the routine default', () => {
+    db.prepare("INSERT INTO model_provider_catalog (provider_id,model_id,display_name) VALUES ('openrouter','anthropic/claude-sonnet-4.6','Research Sonnet')").run()
+    profile(1, 1, 'openrouter/openai/gpt-4.1-mini')
+    profile(1, 2, 'openrouter/anthropic/claude-sonnet-4.6', 'tenant-default', null, null, 'research')
+    expect(resolveEffectiveModel(alpha, { purpose: 'general' }, db)?.profile_id).toBe(1)
+    expect(resolveEffectiveModel(alpha, { purpose: 'research' }, db)?.profile_id).toBe(2)
   })
 })

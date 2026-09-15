@@ -2017,6 +2017,18 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_hermes_research_evidence_source ON hermes_research_evidence(source_id);
       `)
     }
+  },
+  {
+    id: '067_openrouter_research_models',
+    up(db) {
+      const catalog = [
+        ['openrouter', 'anthropic/claude-sonnet-4.6', 'OpenRouter / Claude Sonnet 4.6', 1000000, JSON.stringify({ tools: true, structured_outputs: true }), JSON.stringify({ input: 3, output: 15 })],
+        ['openrouter', 'anthropic/claude-opus-4.6', 'OpenRouter / Claude Opus 4.6', 1000000, JSON.stringify({ tools: true, structured_outputs: true }), JSON.stringify({ input: 5, output: 25 })],
+        ['openrouter', 'google/gemini-3.1-pro-preview', 'OpenRouter / Gemini 3.1 Pro Preview', 1048576, JSON.stringify({ tools: true, structured_outputs: true }), JSON.stringify({ input: 2, output: 12 })],
+      ] as const
+      const insert = db.prepare(`INSERT OR IGNORE INTO model_provider_catalog (provider_id, model_id, display_name, context_window, capabilities, pricing_metadata) VALUES (?, ?, ?, ?, ?, ?)`)
+      for (const row of catalog) insert.run(...row)
+    }
   }
 ]
 
