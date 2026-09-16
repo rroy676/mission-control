@@ -8,14 +8,14 @@ vi.mock('@/lib/db', () => ({
   logAuditEvent: state.audit,
 }))
 
-import { beginNextResearchRequirement, compactResearchContext, ensureResearchChecklist, getResearchChecklistState, recoverStaleResearchClaims, refreshResearchChecklist } from '@/lib/hermes-research'
+import { beginNextResearchRequirement, compactResearchContext, ensureResearchChecklist, getResearchChecklistState, recoverStaleResearchClaims, refreshResearchChecklist, researchActionCompatibility, researchExecutionContract } from '@/lib/hermes-research'
 
 const scope = { tenantId: 1, workspaceId: 1, projectId: 7, taskId: 14 }
 
 function insertEvidence(input: { tenantId?: number; url: string; claim: string; summary?: string; entity?: string }) {
   state.db?.prepare(`INSERT OR IGNORE INTO hermes_research_sources
-    (id,tenant_id,workspace_id,project_id,task_id,run_id,url,content_type,http_status,fetch_outcome)
-    VALUES (1,?,?,?,?,?,'https://epiceries.ca/developers','text/html',200,'SUCCESS')`).run(input.tenantId ?? 1, 1, 7, 14, 'run-1')
+    (id,tenant_id,workspace_id,project_id,task_id,run_id,url,content_type,content_excerpt,http_status,fetch_outcome)
+    VALUES (1,?,?,?,?,?,'https://epiceries.ca/developers','text/html','Base URL is https://epiceries.ca/api. GET /api?endpoint=categories and GET /api?endpoint=search&q=lait',200,'SUCCESS')`).run(input.tenantId ?? 1, 1, 7, 14, 'run-1')
   state.db?.prepare(`INSERT INTO hermes_research_evidence
     (tenant_id,workspace_id,project_id,task_id,run_id,source_url,source_title,publisher,claim,evidence_summary,confidence,classification,retrieved_at,source_id,entity)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(input.tenantId ?? 1, 1, 7, 14, 'run-1', input.url, 'Source', 'Publisher', input.claim, input.summary || 'Summary', 'high', 'VERIFIED', 1, 1, input.entity || null)
@@ -23,8 +23,8 @@ function insertEvidence(input: { tenantId?: number; url: string; claim: string; 
 
 function insertSource(input: { id: number; url: string; contentType?: string; runId?: string }) {
   state.db?.prepare(`INSERT INTO hermes_research_sources
-    (id,tenant_id,workspace_id,project_id,task_id,run_id,url,content_type,http_status,fetch_outcome)
-    VALUES (?,?,?,?,?,?,?,?,200,'SUCCESS')`).run(input.id, 1, 1, 7, 14, input.runId || 'run-1', input.url, input.contentType || 'text/html')
+    (id,tenant_id,workspace_id,project_id,task_id,run_id,url,content_type,content_excerpt,http_status,fetch_outcome)
+    VALUES (?,?,?,?,?,?,?,?,?,200,'SUCCESS')`).run(input.id, 1, 1, 7, 14, input.runId || 'run-1', input.url, input.contentType || 'text/html', '')
 }
 
 describe('priority-aware resumable research checklist', () => {
@@ -48,7 +48,7 @@ describe('priority-aware resumable research checklist', () => {
       );
       CREATE TABLE hermes_research_sources (
         id INTEGER PRIMARY KEY, tenant_id INTEGER, workspace_id INTEGER, project_id INTEGER, task_id INTEGER,
-        run_id TEXT, url TEXT, content_type TEXT, http_status INTEGER, fetch_outcome TEXT
+        run_id TEXT, url TEXT, content_type TEXT, content_excerpt TEXT, http_status INTEGER, fetch_outcome TEXT
       );
     `)
   })
@@ -153,5 +153,27 @@ describe('priority-aware resumable research checklist', () => {
     ensureResearchChecklist(scope)
     refreshResearchChecklist(scope)
     expect(getResearchChecklistState(scope).filter((row) => row.requirement_id.startsWith('retailer_')).every((row) => row.status === 'PENDING')).toBe(true)
+  })
+
+  it('exposes a compact execution contract and rejects incompatible sample actions before execution', () => {
+    insertEvidence({ url: 'https://epiceries.ca/developers', claim: 'Official API documentation describes the categories endpoint.', entity: 'epiceries.ca' })
+    expect(beginNextResearchRequirement(scope, 'run-1')?.id).toBe('epiceries_sample')
+    const contract = researchExecutionContract(scope)
+    expect(contract).toMatchObject({ requirementId: 'epiceries_sample', requiredActionTypes: ['FETCH_PUBLIC_JSON_API'], usefulActionTypes: ['FETCH_PUBLIC_JSON_API'] })
+    expect(contract?.knownFacts).toEqual(expect.arrayContaining(['Official API base: https://epiceries.ca/api', '/api?endpoint=categories']))
+    const context = compactResearchContext(scope, 'run-1')
+    expect(JSON.stringify(context)).toContain('FETCH_PUBLIC_JSON_API')
+    expect(JSON.stringify(context)).toContain('/api?endpoint=categories')
+    expect(JSON.stringify(context)).not.toContain('full source body')
+    const sourceCount = state.db?.prepare('SELECT COUNT(*) c FROM hermes_research_sources').get()
+    expect(researchActionCompatibility(scope, 'FETCH_PUBLIC_URL')).toMatchObject({ compatible: false, code: 'ACTION_NOT_COMPATIBLE_WITH_CURRENT_REQUIREMENT' })
+    expect(state.db?.prepare('SELECT COUNT(*) c FROM hermes_research_sources').get()).toEqual(sourceCount)
+    expect(researchActionCompatibility(scope, 'FETCH_PUBLIC_JSON_API')).toMatchObject({ compatible: true })
+  })
+
+  it('does not globally restrict flexible documentation research actions', () => {
+    ensureResearchChecklist(scope)
+    expect(researchActionCompatibility(scope, 'FETCH_PUBLIC_URL')).toMatchObject({ compatible: true })
+    expect(researchActionCompatibility(scope, 'SEARCH_WEB')).toMatchObject({ compatible: true })
   })
 })

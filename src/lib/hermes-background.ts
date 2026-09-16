@@ -6,7 +6,7 @@ import { readAuthorityShadowState } from './authority/state'
 import { buildHermesProjectContext, buildHermesResearchProjectContext, bindingForSession, createHermesTask, saveHermesMemory } from './hermes-coo'
 import { sendHermesBackgroundMessage } from './hermes-runtime'
 import { resolveEffectiveModel, type EffectiveModel } from './model-profiles'
-import { beginNextResearchRequirement, compactResearchContext, ensureResearchChecklist, fetchPublicJsonApi, fetchPublicUrl, getResearchChecklistState, recordResearchFailure, recoverStaleResearchClaims, recomputeResearchChecklist, researchChecklist, researchCounts, saveHermesEvidence, searchPublicWeb, HERMES_RESEARCH_LIMITS } from './hermes-research'
+import { beginNextResearchRequirement, compactResearchContext, ensureResearchChecklist, fetchPublicJsonApi, fetchPublicUrl, getResearchChecklistState, recordResearchFailure, recoverStaleResearchClaims, recomputeResearchChecklist, researchActionCompatibility, researchChecklist, researchCounts, researchExecutionContract, saveHermesEvidence, searchPublicWeb, HERMES_RESEARCH_LIMITS } from './hermes-research'
 import type { User } from './auth'
 
 export const HERMES_BACKGROUND_LIMITS = {
@@ -148,6 +148,8 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
   let researchFetches = 0
   let approvalId: string | null = null
   let rejectedTaskResultStreak = 0
+  let noProgressStreak = 0
+  const failedApproaches = new Map<string, string>()
   const heartbeat = (activity: string) => updateRun(runId, { heartbeat_at: now(), last_meaningful_activity: activity })
 
   try {
@@ -199,6 +201,19 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
         } : undefined,
         onAction: async (action) => {
           if (isPaused()) throw new Error('Mission Control is PAUSED')
+          const researchScope = { tenantId: task.tenant_id, workspaceId: task.workspace_id, projectId: task.project_id, taskId: task.id }
+          if (research) {
+            const compatibility = researchActionCompatibility(researchScope, action.action)
+            if (!compatibility.compatible) {
+              actionCount += 1
+              updateRun(runId, { action_count: actionCount, heartbeat_at: now(), last_meaningful_activity: `Rejected incompatible research action ${action.action}` })
+              noProgressStreak += 1
+              const contract = compatibility.contract
+              const failed = [...failedApproaches.values()].slice(-4)
+              if (noProgressStreak >= 4) throw new Error(`NO_PROGRESS_ON_CURRENT_REQUIREMENT: ${contract?.requirementId || 'unknown'}; repeated incompatible actions; required action types: ${contract?.requiredActionTypes.join(', ') || 'none'}`)
+              return { code: 'ACTION_NOT_COMPATIBLE_WITH_CURRENT_REQUIREMENT', current_requirement: contract?.requirementId, rejected_action: action.action, required_action_types: contract?.requiredActionTypes || [], useful_action_types: contract?.usefulActionTypes || [], current_gap: contract?.currentGap, failed_approaches: failed, continue_research: true }
+            }
+          }
           actionCount += 1
           updateRun(runId, { action_count: actionCount, heartbeat_at: now(), last_meaningful_activity: `Bounded action ${action.action}` })
           if (actionCount > HERMES_BACKGROUND_LIMITS.maxActionsPerRun) throw new Error('Hermes action limit exceeded')
@@ -211,8 +226,8 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
             researchSearches += 1
             if (researchSearches > HERMES_RESEARCH_LIMITS.maxSearches) throw new Error('Hermes research search limit exceeded')
             updateRun(runId, { research_stage: 'SEARCH', heartbeat_at: now() })
-            try { return await searchPublicWeb(String(params.query || ''), { tenantId: task.tenant_id, workspaceId: task.workspace_id, projectId: task.project_id, taskId: task.id, runId }) }
-            catch (error) { return { error: String(error instanceof Error ? error.message : error).slice(0, 300), query: String(params.query || '') } }
+            try { const result = await searchPublicWeb(String(params.query || ''), { tenantId: task.tenant_id, workspaceId: task.workspace_id, projectId: task.project_id, taskId: task.id, runId }); noProgressStreak = 0; return result }
+            catch (error) { const message = String(error instanceof Error ? error.message : error).slice(0, 300); failedApproaches.set(`SEARCH_WEB:${String(params.query || '').trim().toLowerCase()}`, `SEARCH_WEB ${String(params.query || '').slice(0, 160)} -> ${message}`); noProgressStreak += 1; if (noProgressStreak >= 4) throw new Error(`NO_PROGRESS_ON_CURRENT_REQUIREMENT: repeated failed searches; current requirement is ${researchExecutionContract(researchScope)?.requirementId || 'unknown'}`); return { error: message, query: String(params.query || ''), no_progress: noProgressStreak >= 3, failed_approaches: [...failedApproaches.values()].slice(-4) } }
           }
           if (action.action === 'FETCH_PUBLIC_URL' || action.action === 'FETCH_PUBLIC_JSON_API') {
             rejectedTaskResultStreak = 0
@@ -220,8 +235,8 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
             if (researchFetches > HERMES_RESEARCH_LIMITS.maxFetches) throw new Error('Hermes research fetch limit exceeded')
             updateRun(runId, { research_stage: 'FETCH', heartbeat_at: now() })
             const scope = { tenantId: task.tenant_id, workspaceId: task.workspace_id, projectId: task.project_id, taskId: task.id, runId }
-            try { return action.action === 'FETCH_PUBLIC_JSON_API' ? await fetchPublicJsonApi(String(params.url || ''), scope) : await fetchPublicUrl(String(params.url || ''), scope) }
-            catch (error) { const message = String(error instanceof Error ? error.message : error).slice(0, 300); const sourceId = recordResearchFailure(scope, String(params.url || ''), message); return { error: message, source_id: sourceId, url: String(params.url || '') } }
+            try { const result = action.action === 'FETCH_PUBLIC_JSON_API' ? await fetchPublicJsonApi(String(params.url || ''), scope) : await fetchPublicUrl(String(params.url || ''), scope); noProgressStreak = 0; return result }
+            catch (error) { const message = String(error instanceof Error ? error.message : error).slice(0, 300); const url = String(params.url || ''); const sourceId = recordResearchFailure(scope, url, message); let key = `${action.action}:${url}`; try { const normalized = new URL(url); normalized.searchParams.delete('limit'); normalized.searchParams.delete('offset'); key = `${action.action}:${normalized.toString()}` } catch {} failedApproaches.set(key, `${action.action} ${url.slice(0, 180)} -> ${message}`); noProgressStreak += 1; if (noProgressStreak >= 4) throw new Error(`NO_PROGRESS_ON_CURRENT_REQUIREMENT: repeated failed fetches; current requirement is ${researchExecutionContract(researchScope)?.requirementId || 'unknown'}`); return { error: message, source_id: sourceId, url, no_progress: noProgressStreak >= 3, failed_approaches: [...failedApproaches.values()].slice(-4) } }
           }
           if (action.action === 'SAVE_RESEARCH_EVIDENCE') {
             rejectedTaskResultStreak = 0
