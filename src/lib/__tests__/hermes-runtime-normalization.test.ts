@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { extractHermesAction, extractHermesActions, normalizeHermesResponse, validateResearchActionParameters, validateResearchTurn } from '@/lib/hermes-runtime'
+import { HermesResearchParameterError } from '@/lib/hermes-research-errors'
+import { saveHermesEvidence } from '@/lib/hermes-research'
 
 describe('Hermes response normalization', () => {
   it('classifies reasoning-only responses as incomplete', () => {
@@ -81,8 +83,16 @@ describe('Hermes response normalization', () => {
   })
 
   it('marks missing evidence fields as one-time repairable parameter errors', () => {
-    expect(validateResearchActionParameters({ action: 'SAVE_RESEARCH_EVIDENCE', parameters: { url: 'https://epiceries.ca/developers' } })?.researchRepairable).toBe(true)
+    const error = validateResearchActionParameters({ action: 'SAVE_RESEARCH_EVIDENCE', parameters: { url: 'https://epiceries.ca/developers' } })
+    expect(error).toBeInstanceOf(HermesResearchParameterError)
+    expect(error?.researchRepairable).toBe(true)
     expect(validateResearchActionParameters({ action: 'SAVE_RESEARCH_EVIDENCE', parameters: { url: 'https://epiceries.ca/developers', claim: 'The official documentation identifies the public API.', summary: 'Documentation evidence.', source_id: 29 } })).toBeNull()
+  })
+
+  it('preserves repair classification when evidence validation runs during execution', () => {
+    expect(() => saveHermesEvidence({ tenantId: 1, workspaceId: 1, projectId: 1, taskId: 14, runId: 'repair-test' }, {
+      url: 'https://epiceries.ca/developers', title: 'Developers', claim: '', summary: '', confidence: 'low', classification: 'UNVERIFIED', sourceId: 43,
+    })).toThrowError(HermesResearchParameterError)
   })
 
   it('does not mark unsupported or authority-shaped actions as repairable', () => {

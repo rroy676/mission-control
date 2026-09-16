@@ -5,6 +5,7 @@ import { logger } from '@/lib/logger'
 import { buildHermesProjectContext } from '@/lib/hermes-coo'
 import { requireProfileContext, resolveEffectiveModel } from '@/lib/model-profiles'
 import type { User } from '@/lib/auth'
+import { HermesResearchParameterError } from '@/lib/hermes-research-errors'
 
 const REQUEST_TIMEOUT_MS = 15_000
 const PROJECT_CHAT_TIMEOUT_MS = 30_000
@@ -249,9 +250,7 @@ export function validateResearchActionParameters(action: { action: string; param
   const params = action.parameters || {}
   const missing = (name: string, condition: boolean) => {
     if (condition) return null
-    const error = new Error(`${action.action} requires ${name}`) as Error & { researchRepairable?: boolean }
-    error.researchRepairable = true
-    return error
+    return new HermesResearchParameterError(`${action.action} requires ${name}`)
   }
   if (action.action === 'SEARCH_WEB') return missing('query', typeof params.query === 'string' && params.query.trim().length > 0)
   if (action.action === 'FETCH_PUBLIC_URL' || action.action === 'FETCH_PUBLIC_JSON_API') return missing('url', typeof params.url === 'string' && params.url.trim().length > 0)
@@ -264,7 +263,10 @@ export function validateResearchActionParameters(action: { action: string; param
 }
 
 function isRepairableResearchError(error: unknown): error is Error & { researchRepairable: true } {
-  return Boolean(error && typeof error === 'object' && (error as { researchRepairable?: unknown }).researchRepairable === true)
+  return Boolean(error && typeof error === 'object' && (
+    error instanceof HermesResearchParameterError ||
+    (error as { researchRepairable?: unknown }).researchRepairable === true
+  ))
 }
 
 export async function sendHermesMessage(input: { tenantId: number; workspaceId: number; agentId: number; projectId?: number | null; sessionId?: string; message: string; systemMessage?: string; actor: string; actorUser?: User }) {
@@ -522,24 +524,29 @@ async function sendStatelessHermesResearch(input: Parameters<typeof sendHermesBa
       actionResult = await input.onAction(action)
     } catch (error) {
       if (!isRepairableResearchError(error) || repairCount >= 1) {
-        input.onResearchTurn?.({ turnNumber: iterations, requirementId: prompt.requirementId, ...usage, durationMs: Date.now() - started, responseChars: normalized.content.length, actionType: action.action, actionAccepted: false, repairCount, contextChars: prompt.contextChars, contextEstimatedTokens: prompt.contextEstimatedTokens })
+        input.onResearchTurn?.({ turnNumber: iterations, requirementId: prompt.requirementId, ...usage, durationMs: Date.now() - started, responseChars: normalized.content?.length || 0, actionType: action.action, actionAccepted: false, repairCount, contextChars: prompt.contextChars, contextEstimatedTokens: prompt.contextEstimatedTokens })
         throw error
       }
       repairCount += 1
-      const repair = await request(`/api/sessions/${encodeURIComponent(turnSessionId)}/chat`, {
-        method: 'POST',
-        body: JSON.stringify({ message: `Parameter error: ${error.message}. Return exactly ONE corrected ${action.action} action with every required field, including a substantive claim and source_id when applicable. Do not emit prose or a second action.`, system_message: 'This is the one allowed repair attempt for this research turn. Preserve the action type and emit exactly one bounded mc_action.', provider: input.provider, model: input.model, require_model_lock: true }),
-      }, [], BACKGROUND_PROJECT_CHAT_TIMEOUT_MS)
-      normalized = normalizeHermesResponse(repair.body)
-      if (!normalized.content) throw new HermesRuntimeError('invalid_response', 'Hermes parameter repair returned an empty response', 502)
-      const repairUsage = usageFromHermesBody(repair.body)
-      usage = { inputTokens: usage.inputTokens + repairUsage.inputTokens, outputTokens: usage.outputTokens + repairUsage.outputTokens, cacheReadTokens: usage.cacheReadTokens + repairUsage.cacheReadTokens, cacheWriteTokens: usage.cacheWriteTokens + repairUsage.cacheWriteTokens }
-      const repairedValidation = validateResearchTurn(normalized.content)
-      if (!repairedValidation.valid || repairedValidation.action?.action !== action.action) throw new HermesRuntimeError('invalid_response', `Hermes research parameter repair rejected: ${repairedValidation.reason || 'action type changed'}`, 502)
-      action = repairedValidation.action
-      const repairedParameterError = validateResearchActionParameters(action)
-      if (repairedParameterError) throw new HermesRuntimeError('invalid_response', repairedParameterError.message, 502)
-      actionResult = await input.onAction(action)
+      try {
+        const repair = await request(`/api/sessions/${encodeURIComponent(turnSessionId)}/chat`, {
+          method: 'POST',
+          body: JSON.stringify({ message: `Parameter error: ${error.message}. Return exactly ONE corrected ${action.action} action with every required field, including a substantive claim and source_id when applicable. Do not emit prose or a second action.`, system_message: 'This is the one allowed repair attempt for this research turn. Preserve the action type and emit exactly one bounded mc_action.', provider: input.provider, model: input.model, require_model_lock: true }),
+        }, [], BACKGROUND_PROJECT_CHAT_TIMEOUT_MS)
+        normalized = normalizeHermesResponse(repair.body)
+        if (!normalized.content) throw new HermesRuntimeError('invalid_response', 'Hermes parameter repair returned an empty response', 502)
+        const repairUsage = usageFromHermesBody(repair.body)
+        usage = { inputTokens: usage.inputTokens + repairUsage.inputTokens, outputTokens: usage.outputTokens + repairUsage.outputTokens, cacheReadTokens: usage.cacheReadTokens + repairUsage.cacheReadTokens, cacheWriteTokens: usage.cacheWriteTokens + repairUsage.cacheWriteTokens }
+        const repairedValidation = validateResearchTurn(normalized.content)
+        if (!repairedValidation.valid || repairedValidation.action?.action !== action.action) throw new HermesRuntimeError('invalid_response', `Hermes research parameter repair rejected: ${repairedValidation.reason || 'action type changed'}`, 502)
+        action = repairedValidation.action
+        const repairedParameterError = validateResearchActionParameters(action)
+        if (repairedParameterError) throw new HermesRuntimeError('invalid_response', repairedParameterError.message, 502)
+        actionResult = await input.onAction(action)
+      } catch (repairError) {
+        input.onResearchTurn?.({ turnNumber: iterations, requirementId: prompt.requirementId, ...usage, durationMs: Date.now() - started, responseChars: normalized.content?.length || 0, actionType: action.action, actionAccepted: false, repairCount, contextChars: prompt.contextChars, contextEstimatedTokens: prompt.contextEstimatedTokens })
+        throw repairError
+      }
     }
     input.onResearchTurn?.({ turnNumber: iterations, requirementId: prompt.requirementId, ...usage, durationMs: Date.now() - started, responseChars: normalized.content.length, actionType: action.action, actionAccepted: true, repairCount, contextChars: prompt.contextChars, contextEstimatedTokens: prompt.contextEstimatedTokens })
     totalInput += usage.inputTokens

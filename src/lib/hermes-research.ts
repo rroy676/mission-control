@@ -2,6 +2,7 @@ import dns from 'node:dns/promises'
 import net from 'node:net'
 import { createHash } from 'node:crypto'
 import { getDatabase, logAuditEvent } from './db'
+import { HermesResearchParameterError } from './hermes-research-errors'
 
 export const HERMES_RESEARCH_LIMITS = {
   maxIterations: 12,
@@ -142,14 +143,10 @@ export function markResearchSourceSelected(scope: Scope, sourceId: number, selec
 
 export function saveHermesEvidence(scope: Scope, input: { url: string; title: string; publisher?: string; claim: string; summary: string; quote?: string; confidence: 'high' | 'medium' | 'low'; classification: 'VERIFIED' | 'INFERRED' | 'UNVERIFIED' | 'CONFLICTING'; entity?: string; sourceId?: number }) {
   if (!/^https:\/\//i.test(input.url) || input.claim.trim().length < 20 || input.claim.length > 2_000 || !input.summary.trim() || input.summary.length > 4_000) {
-    const error = new Error('Evidence is invalid: substantive claim and summary are required') as Error & { researchRepairable?: boolean }
-    error.researchRepairable = true
-    throw error
+    throw new HermesResearchParameterError('Evidence is invalid: substantive claim and summary are required')
   }
   if (!input.sourceId) {
-    const error = new Error('Evidence is invalid: source_id is required') as Error & { researchRepairable?: boolean }
-    error.researchRepairable = true
-    throw error
+    throw new HermesResearchParameterError('Evidence is invalid: source_id is required')
   }
   const quote = input.quote?.slice(0, 600) || null
   const db = getDatabase()

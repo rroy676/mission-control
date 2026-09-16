@@ -161,6 +161,8 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
     const baseSystemMessage = `Mission Control background COO execution. You are operating only on the server-authorized tenant ${task.tenant_id}, project ${task.project_id}, task ${task.id}. No shell, PTY, process spawn, credentials, filesystem mutation, financial action, deployment, or architecture change is available. ${research ? 'This is an evidence-first research task. Complete only the current server-selected objective. Do not silently skip it. Use exactly one bounded action in this turn and stop immediately after its closing </mc_action> tag. Do not emit a plan or prose. Preserve exact URLs, dates, and evidence classifications; do not invent access, legal, licensing, or commercial conclusions.' : ''} You may emit only these bounded actions: SAVE_WORKING_MEMORY, CREATE_TASK (must be assigned to yourself), UPDATE_TASK_RESULT (current task only), REQUEST_CEO_APPROVAL, SEARCH_WEB, FETCH_PUBLIC_URL, FETCH_PUBLIC_JSON_API, SAVE_RESEARCH_EVIDENCE. Do not create follow-up tasks unless strictly required by the task and never create more than one. Project context: ${JSON.stringify(context)}\nTask: ${JSON.stringify({ id: task.id, title: task.title, description: task.description, priority: task.priority })}`
     let researchTurnCount = 0
     let researchRepairCount = 0
+    let researchInputTokens = 0
+    let researchOutputTokens = 0
     let researchCacheRead = 0
     let researchCacheWrite = 0
     let researchMaxContextChars = 0
@@ -193,11 +195,13 @@ async function executeClaim(task: any): Promise<{ ok: boolean; message: string }
           if (turn.requirementId) turnDb.prepare(`UPDATE hermes_research_requirements SET action_refs=json_insert(COALESCE(action_refs,'[]'),'$[#]',?), updated_at=unixepoch() WHERE tenant_id=? AND workspace_id=? AND project_id=? AND task_id=? AND requirement_id=?`).run(JSON.stringify({ run_id: runId, turn_id: Number(result.lastInsertRowid), action: turn.actionType, accepted: turn.actionAccepted }), task.tenant_id, task.workspace_id, task.project_id, task.id, turn.requirementId)
           researchTurnCount += 1
           researchRepairCount += turn.repairCount
+          researchInputTokens += turn.inputTokens
+          researchOutputTokens += turn.outputTokens
           researchCacheRead += turn.cacheReadTokens
           researchCacheWrite += turn.cacheWriteTokens
           researchMaxContextChars = Math.max(researchMaxContextChars, turn.contextChars)
           researchMaxContextTokens = Math.max(researchMaxContextTokens, turn.contextEstimatedTokens)
-          updateRun(runId, { model_turn_count: researchTurnCount, repair_count: researchRepairCount, cache_read_tokens: researchCacheRead, cache_write_tokens: researchCacheWrite, max_context_chars: researchMaxContextChars, max_context_estimated_tokens: researchMaxContextTokens })
+          updateRun(runId, { model_turn_count: researchTurnCount, repair_count: researchRepairCount, input_tokens: researchInputTokens, output_tokens: researchOutputTokens, cache_read_tokens: researchCacheRead, cache_write_tokens: researchCacheWrite, max_context_chars: researchMaxContextChars, max_context_estimated_tokens: researchMaxContextTokens })
         } : undefined,
         onAction: async (action) => {
           if (isPaused()) throw new Error('Mission Control is PAUSED')
