@@ -2101,6 +2101,44 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_hermes_research_requirements_claim ON hermes_research_requirements(status, claimed_by_run_id);
       `)
     }
+  },
+  {
+    id: '070_hermes_bounded_continuations',
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS hermes_coo_continuations (
+          task_id INTEGER PRIMARY KEY,
+          tenant_id INTEGER NOT NULL,
+          workspace_id INTEGER NOT NULL,
+          project_id INTEGER NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0,1)),
+          continuation_state TEXT NOT NULL DEFAULT 'READY' CHECK (continuation_state IN ('READY','RUNNING','WAITING_RETRY','WAITING_CEO','WAITING_EXTERNAL','REVIEW','COMPLETE','NO_PROGRESS','SYSTEM_ERROR','SECURITY_STOP','BUDGET_STOP','PAUSED')),
+          last_outcome TEXT,
+          stop_reason TEXT,
+          last_run_id TEXT,
+          previous_run_id TEXT,
+          sequence_no INTEGER NOT NULL DEFAULT 0,
+          automatic_runs INTEGER NOT NULL DEFAULT 0,
+          consecutive_no_progress INTEGER NOT NULL DEFAULT 0,
+          cumulative_input_tokens INTEGER NOT NULL DEFAULT 0,
+          cumulative_output_tokens INTEGER NOT NULL DEFAULT 0,
+          sequence_started_at INTEGER,
+          next_run_at INTEGER,
+          lease_id TEXT,
+          lease_until INTEGER,
+          max_automatic_runs INTEGER NOT NULL DEFAULT 5,
+          max_consecutive_no_progress INTEGER NOT NULL DEFAULT 3,
+          max_input_tokens INTEGER NOT NULL DEFAULT 100000,
+          max_output_tokens INTEGER NOT NULL DEFAULT 12000,
+          max_sequence_seconds INTEGER NOT NULL DEFAULT 1800,
+          updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+          FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_hermes_continuations_due ON hermes_coo_continuations(enabled, continuation_state, next_run_at);
+        CREATE INDEX IF NOT EXISTS idx_hermes_continuations_scope ON hermes_coo_continuations(tenant_id, workspace_id, project_id);
+      `)
+    }
   }
 ]
 

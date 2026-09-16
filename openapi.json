@@ -11075,6 +11075,22 @@
         "responses": { "200": { "description": "Approval decided" }, "400": { "$ref": "#/components/responses/BadRequest" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" } }
       }
     },
+    "/api/hermes/continuation": {
+      "get": {
+        "tags": ["Monitoring"],
+        "summary": "Inspect bounded COO continuation state",
+        "operationId": "getHermesContinuation",
+        "parameters": [{"name":"task_id","in":"query","required":true,"schema":{"type":"integer"}}],
+        "responses": {"200":{"description":"Continuation state"},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"}}
+      },
+      "post": {
+        "tags": ["Admin"],
+        "summary": "Enable, disable, or continue one bounded COO task run",
+        "operationId": "controlHermesContinuation",
+        "requestBody": {"required":true,"content":{"application/json":{"schema":{"type":"object","required":["task_id","action"],"properties":{"task_id":{"type":"integer"},"action":{"type":"string","enum":["enable","disable","continue_once"]}}}}}},
+        "responses": {"200":{"description":"Continuation control result"},"400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"},"403":{"$ref":"#/components/responses/Forbidden"}}
+      }
+    },
     "/api/hermes/events": {
       "post": {
         "tags": [

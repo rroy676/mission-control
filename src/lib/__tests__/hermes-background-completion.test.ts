@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
 import { describe, expect, it } from 'vitest'
-import { normalizeHermesTaskResultIdentity, resolveHermesBackgroundState, updateHermesTaskStatus } from '@/lib/hermes-background'
+import { classifyHermesRunOutcome, normalizeHermesTaskResultIdentity, resolveHermesBackgroundState, updateHermesTaskStatus } from '@/lib/hermes-background'
 
 function fixture() {
   const db = new Database(':memory:')
@@ -75,5 +75,29 @@ describe('Hermes COO current-state precedence', () => {
     })).toBe('IDLE')
     // The failed run remains available in recent history; only the current
     // failure signal is cleared by the successful retry.
+  })
+})
+
+describe('bounded continuation outcome classification', () => {
+  const base = { runStatus: 'SUCCEEDED' as const, taskStatus: 'blocked', beforeSources: 1, afterSources: 1, beforeEvidence: 1, afterEvidence: 1, beforeChecklist: 'pending', afterChecklist: 'pending' }
+  it('classifies durable source, evidence, or checklist advancement as progress', () => {
+    expect(classifyHermesRunOutcome({ ...base, afterSources: 2 })).toBe('PROGRESS')
+    expect(classifyHermesRunOutcome({ ...base, afterEvidence: 2 })).toBe('PROGRESS')
+    expect(classifyHermesRunOutcome({ ...base, afterChecklist: 'satisfied' })).toBe('PROGRESS')
+  })
+  it('classifies safely rejected research evidence as no progress', () => {
+    expect(classifyHermesRunOutcome({ ...base, runStatus: 'FAILED', error: 'Evidence is invalid: substantive claim and summary are required' })).toBe('NO_PROGRESS')
+  })
+  it('distinguishes provider/system failure from research no progress', () => {
+    expect(classifyHermesRunOutcome({ ...base, runStatus: 'FAILED', error: 'OpenRouter unavailable' })).toBe('SYSTEM_ERROR')
+    expect(classifyHermesRunOutcome({ ...base, runStatus: 'INTERRUPTED', error: 'Mission Control is PAUSED' })).toBe('RESEARCH_BLOCKED')
+  })
+  it('classifies CEO, review, and completion boundaries from durable state', () => {
+    expect(classifyHermesRunOutcome({ ...base, runStatus: 'WAITING_FOR_CEO', taskStatus: 'awaiting_owner' })).toBe('WAITING_CEO')
+    expect(classifyHermesRunOutcome({ ...base, taskStatus: 'review' })).toBe('COMPLETE_OR_REVIEW')
+    expect(classifyHermesRunOutcome({ ...base, taskStatus: 'done' })).toBe('COMPLETE_OR_REVIEW')
+  })
+  it('does not let a model error string override durable progress', () => {
+    expect(classifyHermesRunOutcome({ ...base, afterEvidence: 2, error: 'provider error' })).toBe('PROGRESS')
   })
 })
