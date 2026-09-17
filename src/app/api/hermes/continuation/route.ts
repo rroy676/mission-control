@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
   const action = body?.action
   if (!Number.isInteger(taskId) || taskId < 1 || !['enable', 'disable', 'continue_once'].includes(action)) return NextResponse.json({ error: 'task_id and action (enable, disable, continue_once) are required' }, { status: 400 })
   try {
-    if (action === 'continue_once') return NextResponse.json(await continueHermesTaskOnce(taskId, auth.user.workspace_id))
+    if (action === 'continue_once') { const result = await continueHermesTaskOnce(taskId, auth.user.workspace_id); return NextResponse.json(result, { status: result.ok ? 200 : 409 }) }
     return NextResponse.json({ continuation: setHermesContinuation(taskId, auth.user.workspace_id, action === 'enable') })
   } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : 'Continuation control failed' }, { status: 400 }) }
 }

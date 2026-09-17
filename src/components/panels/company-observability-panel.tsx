@@ -32,8 +32,9 @@ export function CompanyObservabilityPanel() {
   const continuationControl = async (taskId: number, action: 'enable' | 'disable' | 'continue_once') => {
     setPending(true); setControl(`${action} pending…`)
     try {
-      await apiFetch('/api/hermes/continuation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task_id: taskId, action }) })
-      setControl(`Continuation ${action} accepted`)
+      const result = await apiFetch<{ ok?: boolean; accepted?: boolean; message?: string; run_id?: string }>('/api/hermes/continuation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task_id: taskId, action }) })
+      if (action === 'continue_once' && result?.ok !== true && result?.accepted !== true) { setControl(`${action} failed: ${result?.message || 'run was not accepted'}`); return }
+      setControl(`Continuation ${action} accepted${result?.run_id ? ` · run ${result.run_id}` : ''}`)
       window.setTimeout(() => window.location.reload(), 500)
     } catch (e: any) { setControl(`${action} failed: ${e?.message || 'request failed'}`) }
     finally { setPending(false) }

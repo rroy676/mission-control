@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
 import { describe, expect, it } from 'vitest'
-import { classifyHermesRunOutcome, isHermesRunStartEligible, normalizeHermesTaskResultIdentity, resolveHermesBackgroundState, resolveHermesContinuationTokenUsage, shouldFinalizeHermesContinuation, updateHermesTaskStatus } from '@/lib/hermes-background'
+import { classifyHermesRunOutcome, isHermesOneShotStartEligible, isHermesRunStartEligible, normalizeHermesTaskResultIdentity, resolveHermesBackgroundState, resolveHermesContinuationTokenUsage, shouldFinalizeHermesContinuation, updateHermesTaskStatus } from '@/lib/hermes-background'
 
 function fixture() {
   const db = new Database(':memory:')
@@ -173,5 +173,20 @@ describe('Hermes continuation token accounting primitives', () => {
     const usage = resolveHermesContinuationTokenUsage(0, 0, 75, 20)
     expect(current.cumulative_input_tokens + usage.inputTokens).toBeGreaterThan(100_000)
     expect(current.cumulative_output_tokens + usage.outputTokens).toBeGreaterThan(12_000)
+  })
+})
+
+describe('Hermes continue-once final safety gate', () => {
+  const base = { taskExists: true, taskStatus: 'in_progress', autonomous: true, paused: false, activeRun: false,
+    continuationExists: true, continuationEnabled: true, continuationState: 'RUNNING', leaseOwned: true, leaseUntil: 200,
+    automaticRuns: 4, maxAutomaticRuns: 5, cumulativeInputTokens: 100, cumulativeOutputTokens: 20,
+    maxInputTokens: 100_000, maxOutputTokens: 12_000, sequenceStartedAt: 100, maxSequenceSeconds: 1800, timestamp: 150 }
+  it('accepts a leased one-shot without a scheduler due time', () => {
+    expect(isHermesOneShotStartEligible(base)).toBe(true)
+  })
+  it('rejects active, budget-exhausted, and non-running states', () => {
+    expect(isHermesOneShotStartEligible({ ...base, activeRun: true })).toBe(false)
+    expect(isHermesOneShotStartEligible({ ...base, automaticRuns: 5 })).toBe(false)
+    expect(isHermesOneShotStartEligible({ ...base, continuationState: 'READY' })).toBe(false)
   })
 })
