@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
 import { describe, expect, it } from 'vitest'
-import { classifyHermesRunOutcome, isHermesRunStartEligible, normalizeHermesTaskResultIdentity, resolveHermesBackgroundState, updateHermesTaskStatus } from '@/lib/hermes-background'
+import { classifyHermesRunOutcome, isHermesRunStartEligible, normalizeHermesTaskResultIdentity, resolveHermesBackgroundState, resolveHermesContinuationTokenUsage, shouldFinalizeHermesContinuation, updateHermesTaskStatus } from '@/lib/hermes-background'
 
 function fixture() {
   const db = new Database(':memory:')
@@ -143,5 +143,35 @@ describe('Hermes continuation final start gate', () => {
 
   it('allows CONTINUE ONCE-style starts without a scheduled continuation lease', () => {
     expect(isHermesRunStartEligible({ ...base, scheduled: false, continuationExists: false, continuationEnabled: false, continuationState: null, leaseOwned: false, leaseUntil: null, nextRunAt: null })).toBe(true)
+  })
+})
+
+
+describe('Hermes continuation token accounting primitives', () => {
+  it('uses persisted totals when finalizer arguments are zero', () => {
+    expect(resolveHermesContinuationTokenUsage(0, 0, 120, 30)).toEqual({ inputTokens: 120, outputTokens: 30 })
+  })
+  it('uses response totals when present for successful progress', () => {
+    expect(resolveHermesContinuationTokenUsage(90, 20, 120, 30)).toEqual({ inputTokens: 90, outputTokens: 20 })
+  })
+  it('counts repaired failures and provider failures from persisted run totals', () => {
+    expect(resolveHermesContinuationTokenUsage(0, 0, 40, 8)).toEqual({ inputTokens: 40, outputTokens: 8 })
+    expect(resolveHermesContinuationTokenUsage(0, 0, 11, 4)).toEqual({ inputTokens: 11, outputTokens: 4 })
+  })
+  it('counts disabled-during-active finalization using persisted totals', () => {
+    expect(resolveHermesContinuationTokenUsage(0, 0, 70, 9)).toEqual({ inputTokens: 70, outputTokens: 9 })
+  })
+  it('does not double count an already finalized run', () => {
+    expect(shouldFinalizeHermesContinuation('run-1', 'run-1')).toBe(false)
+    expect(shouldFinalizeHermesContinuation('run-0', 'run-1')).toBe(true)
+  })
+  it('keeps unavailable token usage at zero', () => {
+    expect(resolveHermesContinuationTokenUsage(0, 0, 0, 0)).toEqual({ inputTokens: 0, outputTokens: 0 })
+  })
+  it('preserves budget inputs for failed runs instead of replacing them with zero', () => {
+    const current = { cumulative_input_tokens: 99_950, cumulative_output_tokens: 11_990 }
+    const usage = resolveHermesContinuationTokenUsage(0, 0, 75, 20)
+    expect(current.cumulative_input_tokens + usage.inputTokens).toBeGreaterThan(100_000)
+    expect(current.cumulative_output_tokens + usage.outputTokens).toBeGreaterThan(12_000)
   })
 })

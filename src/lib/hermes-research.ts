@@ -171,7 +171,7 @@ function task14RequirementEvidence(scope: Pick<Scope, 'tenantId' | 'workspaceId'
     ORDER BY e.id`).all(scope.tenantId, scope.workspaceId, scope.projectId, scope.taskId) as RequirementEvidence[]
 }
 function task14RequirementSources(scope: Pick<Scope, 'tenantId' | 'workspaceId' | 'projectId' | 'taskId'>) {
-  return getDatabase().prepare('SELECT id,url,content_type,content_excerpt,fetch_outcome,http_status FROM hermes_research_sources WHERE tenant_id=? AND workspace_id=? AND project_id=? AND task_id=? ORDER BY id').all(scope.tenantId, scope.workspaceId, scope.projectId, scope.taskId) as Array<RequirementSource & { content_excerpt?: string }>
+  return getDatabase().prepare('SELECT id,url,content_type,content_excerpt,fetch_outcome,http_status,run_id FROM hermes_research_sources WHERE tenant_id=? AND workspace_id=? AND project_id=? AND task_id=? ORDER BY id').all(scope.tenantId, scope.workspaceId, scope.projectId, scope.taskId) as Array<RequirementSource & { content_excerpt?: string; run_id?: string }>
 }
 
 function parseActionRefs(value: string) {
@@ -340,36 +340,68 @@ export type ResearchExecutionContract = {
   currentGap: string
   knownFacts: string[]
   relevantSourceIds: number[]
+  currentRunSourceIds: number[]
+  priorContextSourceIds: number[]
 }
 
-export function researchExecutionContract(scope: Pick<Scope, 'tenantId' | 'workspaceId' | 'projectId' | 'taskId'>, requirementId?: string | null): ResearchExecutionContract | null {
-  const sources = task14RequirementSources(scope) as Array<RequirementSource & { content_excerpt?: string }>
+const EPICERIES_SCHEMA_ENDPOINT = 'https://epiceries.ca/api?endpoint=search&q=lait&sort=price_asc&limit=2'
+const EPICERIES_SCHEMA_FIELDS = ['ok', 'data', 'count', 'limit', 'offset', 'hasMore', 'results', 'id', 'name', 'brand', 'size', 'price', 'unitPrice', 'store', 'discounted', 'category', 'link', 'url', 'updated'] as const
+
+function observedEpiceriesSchemaFacts(sources: Array<RequirementSource & { content_excerpt?: string }>) {
+  const observed = new Set<string>()
+  for (const source of sources.filter((item) => item.fetch_outcome === 'SUCCESS' && isEpiceriesUrl(item.url))) {
+    const excerpt = source.content_excerpt || ''
+    for (const field of EPICERIES_SCHEMA_FIELDS) {
+      if (new RegExp(`(?:[\"']${field}[\"']\\s*:|\\b${field}\\b)`, 'i').test(excerpt)) observed.add(field)
+    }
+  }
+  return observed.size >= 3 ? [`Observed epiceries.ca JSON fields only: ${EPICERIES_SCHEMA_FIELDS.filter((field) => observed.has(field)).join(', ')}.`] : []
+}
+
+export function researchExecutionContract(scope: Pick<Scope, 'tenantId' | 'workspaceId' | 'projectId' | 'taskId'>, requirementId?: string | null, runId?: string | null): ResearchExecutionContract | null {
+  const sources = task14RequirementSources(scope) as Array<RequirementSource & { content_excerpt?: string; run_id?: string }>
   const checklist = getResearchChecklistState(scope)
-  const current = requirementId ? checklist.find((row) => row.requirement_id === requirementId) : checklist.find((row) => row.status === 'PENDING' || row.status === 'IN_PROGRESS')
+  const current = requirementId ? checklist.find((row) => row.requirement_id === requirementId) : checklist.find((row) => row.status === 'IN_PROGRESS') || checklist.find((row) => row.status === 'PENDING')
   if (!current) return null
   const requirement = TASK14_RESEARCH_REQUIREMENTS.find((item) => item.id === current.requirement_id)
   if (!requirement) return null
-  const requiredActionTypes = requirement.requiredActionTypes || []
-  const usefulActionTypes = requirement.usefulActionTypes || []
+  const currentRunSourceIds = sources.filter((source) => source.run_id === runId && source.fetch_outcome === 'SUCCESS' && /epiceries\.ca/i.test(source.url) && /json/i.test(source.content_type)).map((source) => source.id)
+  const schemaNeedsCurrentFetch = current.requirement_id === 'epiceries_schema' && currentRunSourceIds.length === 0
+  const requiredActionTypes = schemaNeedsCurrentFetch ? ['FETCH_PUBLIC_JSON_API' as ResearchActionType] : (requirement.requiredActionTypes || [])
+  const usefulActionTypes = schemaNeedsCurrentFetch ? ['FETCH_PUBLIC_JSON_API' as ResearchActionType] : current.requirement_id === 'epiceries_schema' ? ['FETCH_PUBLIC_JSON_API', 'SAVE_RESEARCH_EVIDENCE'] as ResearchActionType[] : (requirement.usefulActionTypes || [])
   const sourceIds = sources.filter((source) => source.fetch_outcome === 'SUCCESS' && /epiceries\.ca/i.test(source.url)).map((source) => source.id)
   const documentedApiBases = sources.flatMap((source) => source.fetch_outcome === 'SUCCESS' && source.content_excerpt ? [...source.content_excerpt.matchAll(/https:\/\/[A-Za-z0-9.-]+\/api/gi)].map((match) => match[0]) : [])
   const knownFacts = current.requirement_id === 'epiceries_sample'
     ? [...new Set(documentedApiBases.map((base) => `Official API base: ${base}`)), ...documentedRouteFacts(sources).filter((fact) => /endpoint=(search|product|history|barcode|storeproduct|categories)/i.test(fact))]
-    : []
+    : current.requirement_id === 'epiceries_schema'
+      ? [
+        `Verified JSON API endpoint: ${EPICERIES_SCHEMA_ENDPOINT}.`,
+        ...observedEpiceriesSchemaFacts(sources),
+        ...(schemaNeedsCurrentFetch ? ['Prior-run source IDs are context only; refetch this endpoint in the current run and use that returned source_id for evidence.'] : ['A current-run JSON source is available; use its source_id for evidence.']),
+        'SAVE_RESEARCH_EVIDENCE requires a substantive claim, substantive summary, current-run-valid source_id, and valid classification/entity.',
+        'Example claim shape: an observed epiceries.ca response exposes an ok/data envelope with pagination and product pricing fields; state only fields present in the fetched response.',
+        'Example summary shape: the observed lait response returned data pagination fields and product identity, pricing, retailer, discount, category, URL/link, and updated fields; state only observed fields.',
+      ]
+      : []
+  const priorContextSourceIds = sourceIds.filter((id) => !currentRunSourceIds.includes(id))
   return {
     requirementId: current.requirement_id,
     requiredActionTypes,
     usefulActionTypes,
     currentGap: current.requirement_id === 'epiceries_sample'
       ? 'No successful FETCH_PUBLIC_JSON_API response is persisted.'
-      : requirement.objective,
+      : current.requirement_id === 'epiceries_schema'
+        ? schemaNeedsCurrentFetch ? `Refetch ${EPICERIES_SCHEMA_ENDPOINT} with FETCH_PUBLIC_JSON_API, then save grounded evidence using the returned current-run source_id.` : 'Use the current-run JSON source to save grounded schema evidence.'
+        : requirement.objective,
     knownFacts: [...new Set(knownFacts)],
-    relevantSourceIds: sourceIds.slice(-8),
+    relevantSourceIds: current.requirement_id === 'epiceries_schema' ? currentRunSourceIds.slice(-8) : sourceIds.slice(-8),
+    currentRunSourceIds: currentRunSourceIds.slice(-8),
+    priorContextSourceIds: priorContextSourceIds.slice(-8),
   }
 }
 
-export function researchActionCompatibility(scope: Pick<Scope, 'tenantId' | 'workspaceId' | 'projectId' | 'taskId'>, actionType: string) {
-  const contract = researchExecutionContract(scope)
+export function researchActionCompatibility(scope: Pick<Scope, 'tenantId' | 'workspaceId' | 'projectId' | 'taskId'>, actionType: string, runId?: string | null) {
+  const contract = researchExecutionContract(scope, undefined, runId)
   if (!contract || !contract.requiredActionTypes.length) return { compatible: true as const, contract }
   const compatible = contract.usefulActionTypes.includes(actionType as ResearchActionType)
   return compatible ? { compatible: true as const, contract } : { compatible: false as const, contract, code: 'ACTION_NOT_COMPATIBLE_WITH_CURRENT_REQUIREMENT' as const }
@@ -377,14 +409,14 @@ export function researchActionCompatibility(scope: Pick<Scope, 'tenantId' | 'wor
 
 export function compactResearchContext(scope: Pick<Scope, 'tenantId' | 'workspaceId' | 'projectId' | 'taskId'>, runId: string) {
   const checklist = refreshResearchChecklist(scope)
-  const current = checklist.find((row) => row.status === 'PENDING' || row.status === 'IN_PROGRESS')
+  const current = checklist.find((row) => row.status === 'IN_PROGRESS') || checklist.find((row) => row.status === 'PENDING')
   const relevant = task14RequirementEvidence(scope).filter((row) => current && `${row.entity || ''} ${row.claim} ${row.evidence_summary}`.toLowerCase().includes(current.label.toLowerCase().split('/')[0].split(' ')[0])).slice(-4)
-  const executionContract = researchExecutionContract(scope, current?.requirement_id)
+  const executionContract = researchExecutionContract(scope, current?.requirement_id, runId)
   return {
     run_id: runId,
     current_requirement: current ? { id: current.requirement_id, phase: current.phase, label: current.label, status: current.status } : null,
     checklist: checklist.map((row) => ({ id: row.requirement_id, phase: row.phase, status: row.status })),
-    execution_contract: executionContract ? { required_action_types: executionContract.requiredActionTypes, useful_action_types: executionContract.usefulActionTypes, current_gap: executionContract.currentGap, known_facts: executionContract.knownFacts, relevant_source_ids: executionContract.relevantSourceIds } : null,
+    execution_contract: executionContract ? { required_action_types: executionContract.requiredActionTypes, useful_action_types: executionContract.usefulActionTypes, current_gap: executionContract.currentGap, known_facts: executionContract.knownFacts, relevant_source_ids: executionContract.relevantSourceIds, current_run_source_ids: executionContract.currentRunSourceIds, prior_context_source_ids: executionContract.priorContextSourceIds } : null,
     relevant_evidence: relevant.map((row) => ({ evidence_id: row.id, source_id: row.source_id, url: row.source_url, entity: row.entity, classification: row.classification, claim: row.claim.slice(0, 500), summary: row.evidence_summary.slice(0, 700) })),
   }
 }

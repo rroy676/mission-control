@@ -171,6 +171,39 @@ describe('priority-aware resumable research checklist', () => {
     expect(researchActionCompatibility(scope, 'FETCH_PUBLIC_JSON_API')).toMatchObject({ compatible: true })
   })
 
+  it('guides epiceries_schema to a current-run JSON refetch and keeps prior sources contextual', () => {
+    insertSource({ id: 43, url: 'https://epiceries.ca/api?endpoint=search&q=lait&sort=price_asc&limit=2', contentType: 'application/json', runId: 'prior-run' })
+    ensureResearchChecklist(scope)
+    state.db?.prepare("UPDATE hermes_research_requirements SET status='SATISFIED' WHERE requirement_id != 'epiceries_schema'").run()
+    state.db?.prepare("UPDATE hermes_research_requirements SET status='IN_PROGRESS' WHERE requirement_id='epiceries_schema'").run()
+    const contract = researchExecutionContract(scope, 'epiceries_schema', 'current-run')
+    expect(contract).toMatchObject({ requiredActionTypes: ['FETCH_PUBLIC_JSON_API'], usefulActionTypes: ['FETCH_PUBLIC_JSON_API'], relevantSourceIds: [], priorContextSourceIds: [43] })
+    expect(contract?.knownFacts.join(' ')).toContain('Verified JSON API endpoint: https://epiceries.ca/api?endpoint=search&q=lait&sort=price_asc&limit=2')
+    expect(contract?.knownFacts.join(' ')).toContain('Prior-run source IDs are context only')
+    expect(researchActionCompatibility(scope, 'SAVE_RESEARCH_EVIDENCE', 'current-run').compatible).toBe(false)
+  })
+
+  it('allows schema evidence after a successful current-run JSON fetch', () => {
+    insertSource({ id: 44, url: 'https://epiceries.ca/api?endpoint=search&q=lait&sort=price_asc&limit=2', contentType: 'application/json', runId: 'current-run' })
+    ensureResearchChecklist(scope)
+    state.db?.prepare("UPDATE hermes_research_requirements SET status='IN_PROGRESS' WHERE requirement_id='epiceries_schema'").run()
+    const contract = researchExecutionContract(scope, 'epiceries_schema', 'current-run')
+    expect(contract).toMatchObject({ requiredActionTypes: [], usefulActionTypes: ['FETCH_PUBLIC_JSON_API', 'SAVE_RESEARCH_EVIDENCE'], relevantSourceIds: [44], currentRunSourceIds: [44] })
+    expect(researchActionCompatibility(scope, 'SAVE_RESEARCH_EVIDENCE', 'current-run').compatible).toBe(true)
+  })
+
+  it('bounds schema context to field names rather than raw response bodies', () => {
+    insertSource({ id: 45, url: 'https://epiceries.ca/api?endpoint=search&q=lait&sort=price_asc&limit=2', contentType: 'application/json', runId: 'prior-run' })
+    state.db?.prepare("UPDATE hermes_research_sources SET content_excerpt=? WHERE id=45").run('{"ok":true,"data":{"count":2,"results":[{"id":"x","name":"Lait","price":0.49,"secret":"do-not-expose"}]}}')
+    ensureResearchChecklist(scope)
+    state.db?.prepare("UPDATE hermes_research_requirements SET status='IN_PROGRESS' WHERE requirement_id='epiceries_schema'").run()
+    const context = compactResearchContext(scope, 'current-run')
+    const serialized = JSON.stringify(context)
+    expect(serialized).toContain('Observed epiceries.ca JSON fields only:')
+    expect(serialized).toContain('price')
+    expect(serialized).not.toContain('do-not-expose')
+  })
+
   it('does not globally restrict flexible documentation research actions', () => {
     ensureResearchChecklist(scope)
     expect(researchActionCompatibility(scope, 'FETCH_PUBLIC_URL')).toMatchObject({ compatible: true })

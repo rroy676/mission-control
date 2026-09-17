@@ -219,18 +219,33 @@ function continuationAudit(action: string, row: any, extra: Record<string, unkno
     workspace_id: row.workspace_id, tenant_id: row.tenant_id })
 }
 
-function finalizeHermesContinuation(task: any, runId: string, outcome: HermesRunOutcome, reason: string, inputTokens: number, outputTokens: number, beforeChecklist: string, afterChecklist: string) {
+export function resolveHermesContinuationTokenUsage(inputTokens: number, outputTokens: number, persistedInputTokens = 0, persistedOutputTokens = 0) {
+  return {
+    inputTokens: inputTokens > 0 ? inputTokens : Math.max(0, Number(persistedInputTokens || 0)),
+    outputTokens: outputTokens > 0 ? outputTokens : Math.max(0, Number(persistedOutputTokens || 0)),
+  }
+}
+
+export function shouldFinalizeHermesContinuation(lastRunId: string | null | undefined, runId: string) {
+  return lastRunId !== runId
+}
+
+export function finalizeHermesContinuation(task: any, runId: string, outcome: HermesRunOutcome, reason: string, inputTokens: number, outputTokens: number, beforeChecklist: string, afterChecklist: string) {
   if (!autonomousPermitted(task)) return
   const db = getDatabase()
   const current = ensureHermesContinuation({ tenantId: task.tenant_id, workspaceId: task.workspace_id, projectId: task.project_id, taskId: task.id })
-  if (!current) return
+  if (!current || !shouldFinalizeHermesContinuation(current.last_run_id, runId)) return
+  const persistedRun = db.prepare('SELECT input_tokens, output_tokens FROM hermes_coo_runs WHERE run_id=? AND tenant_id=? AND workspace_id=? AND project_id=? AND task_id=?').get(runId, task.tenant_id, task.workspace_id, task.project_id, task.id) as { input_tokens?: number; output_tokens?: number } | undefined
+  const tokenUsage = resolveHermesContinuationTokenUsage(inputTokens, outputTokens, Number(persistedRun?.input_tokens || 0), Number(persistedRun?.output_tokens || 0))
+  const effectiveInputTokens = tokenUsage.inputTokens
+  const effectiveOutputTokens = tokenUsage.outputTokens
   const timestamp = now()
   const executionEnabled = current.enabled === 1
   const progressed = outcome === 'PROGRESS'
   const noProgress = outcome === 'NO_PROGRESS' || outcome === 'RESEARCH_BLOCKED'
   const noProgressCount = progressed ? 0 : noProgress ? current.consecutive_no_progress + 1 : current.consecutive_no_progress
-  const inputTotal = current.cumulative_input_tokens + inputTokens
-  const outputTotal = current.cumulative_output_tokens + outputTokens
+  const inputTotal = current.cumulative_input_tokens + effectiveInputTokens
+  const outputTotal = current.cumulative_output_tokens + effectiveOutputTokens
   const sequenceStarted = current.sequence_started_at || timestamp
   let state: HermesContinuationState = 'SYSTEM_ERROR'
   let nextRunAt: number | null = null
@@ -402,7 +417,7 @@ async function executeClaim(task: any, leaseId: string | null = null): Promise<{
           if (isPaused()) throw new Error('Mission Control is PAUSED')
           const researchScope = { tenantId: task.tenant_id, workspaceId: task.workspace_id, projectId: task.project_id, taskId: task.id }
           if (research) {
-            const compatibility = researchActionCompatibility(researchScope, action.action)
+            const compatibility = researchActionCompatibility(researchScope, action.action, runId)
             if (!compatibility.compatible) {
               actionCount += 1
               updateRun(runId, { action_count: actionCount, heartbeat_at: now(), last_meaningful_activity: `Rejected incompatible research action ${action.action}` })
