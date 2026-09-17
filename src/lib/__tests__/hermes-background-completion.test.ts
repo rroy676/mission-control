@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
 import { describe, expect, it } from 'vitest'
-import { classifyHermesRunOutcome, normalizeHermesTaskResultIdentity, resolveHermesBackgroundState, updateHermesTaskStatus } from '@/lib/hermes-background'
+import { classifyHermesRunOutcome, isHermesRunStartEligible, normalizeHermesTaskResultIdentity, resolveHermesBackgroundState, updateHermesTaskStatus } from '@/lib/hermes-background'
 
 function fixture() {
   const db = new Database(':memory:')
@@ -85,6 +85,16 @@ describe('bounded continuation outcome classification', () => {
     expect(classifyHermesRunOutcome({ ...base, afterEvidence: 2 })).toBe('PROGRESS')
     expect(classifyHermesRunOutcome({ ...base, afterChecklist: 'satisfied' })).toBe('PROGRESS')
   })
+  it('does not classify a research claim as progress', () => {
+    const before = JSON.stringify([{ requirement_id: 'r1', status: 'PENDING', claimed_by_run_id: null, claimed_at: null }])
+    const after = JSON.stringify([{ requirement_id: 'r1', status: 'IN_PROGRESS', claimed_by_run_id: 'run-1', claimed_at: 123 }])
+    expect(classifyHermesRunOutcome({ ...base, beforeChecklist: before, afterChecklist: after })).toBe('NO_PROGRESS')
+  })
+  it('does not classify checklist recovery as progress', () => {
+    const before = JSON.stringify([{ requirement_id: 'r1', status: 'IN_PROGRESS' }])
+    const after = JSON.stringify([{ requirement_id: 'r1', status: 'PENDING' }])
+    expect(classifyHermesRunOutcome({ ...base, beforeChecklist: before, afterChecklist: after })).toBe('NO_PROGRESS')
+  })
   it('classifies safely rejected research evidence as no progress', () => {
     expect(classifyHermesRunOutcome({ ...base, runStatus: 'FAILED', error: 'Evidence is invalid: substantive claim and summary are required' })).toBe('NO_PROGRESS')
   })
@@ -99,5 +109,39 @@ describe('bounded continuation outcome classification', () => {
   })
   it('does not let a model error string override durable progress', () => {
     expect(classifyHermesRunOutcome({ ...base, afterEvidence: 2, error: 'provider error' })).toBe('PROGRESS')
+  })
+})
+
+
+describe('Hermes continuation final start gate', () => {
+  const base = {
+    taskExists: true, taskStatus: 'in_progress', autonomous: true, paused: false, activeRun: false,
+    continuationExists: true, continuationEnabled: true, continuationState: 'RUNNING', leaseOwned: true,
+    leaseUntil: 200, nextRunAt: 100, scheduled: true, timestamp: 100,
+  }
+
+  it.each([
+    ['disable committed after scheduler selection', { continuationEnabled: false }],
+    ['next run cleared by disable', { nextRunAt: null }],
+    ['lease cleared by disable', { leaseOwned: false }],
+    ['lease expired', { leaseUntil: 99 }],
+    ['continuation deleted', { continuationExists: false }],
+    ['task deleted', { taskExists: false }],
+    ['task no longer autonomous', { autonomous: false }],
+    ['task no longer runnable', { taskStatus: 'blocked' }],
+    ['global pause', { paused: true }],
+    ['active run exists', { activeRun: true }],
+    ['continuation is not in running lease state', { continuationState: 'READY' }],
+    ['scheduled run is not due', { nextRunAt: 101 }],
+  ])('rejects %s immediately before run creation', (_label, change) => {
+    expect(isHermesRunStartEligible({ ...base, ...change })).toBe(false)
+  })
+
+  it('accepts a normal enabled due continuation with its owned valid lease', () => {
+    expect(isHermesRunStartEligible(base)).toBe(true)
+  })
+
+  it('allows CONTINUE ONCE-style starts without a scheduled continuation lease', () => {
+    expect(isHermesRunStartEligible({ ...base, scheduled: false, continuationExists: false, continuationEnabled: false, continuationState: null, leaseOwned: false, leaseUntil: null, nextRunAt: null })).toBe(true)
   })
 })
