@@ -181,12 +181,27 @@ describe('Hermes continue-once final safety gate', () => {
     continuationExists: true, continuationEnabled: true, continuationState: 'RUNNING', leaseOwned: true, leaseUntil: 200,
     automaticRuns: 4, maxAutomaticRuns: 5, cumulativeInputTokens: 100, cumulativeOutputTokens: 20,
     maxInputTokens: 100_000, maxOutputTokens: 12_000, sequenceStartedAt: 100, maxSequenceSeconds: 1800, timestamp: 150 }
-  it('accepts a leased one-shot without a scheduler due time', () => {
-    expect(isHermesOneShotStartEligible(base)).toBe(true)
+  it('accepts a one-shot without a scheduler due time or lease', () => {
+    expect(isHermesOneShotStartEligible({ ...base, taskStatus: 'assigned', continuationState: 'NO_PROGRESS', leaseOwned: false, leaseUntil: null })).toBe(true)
   })
-  it('rejects active, budget-exhausted, and non-running states', () => {
+  it('rejects active and budget-exhausted states', () => {
     expect(isHermesOneShotStartEligible({ ...base, activeRun: true })).toBe(false)
     expect(isHermesOneShotStartEligible({ ...base, automaticRuns: 5 })).toBe(false)
-    expect(isHermesOneShotStartEligible({ ...base, continuationState: 'READY' })).toBe(false)
+  })
+  it.each(['READY', 'WAITING_RETRY', 'NO_PROGRESS'])('accepts explicit one-shot recovery from %s without a scheduler lease or due time', (continuationState) => {
+    expect(isHermesOneShotStartEligible({ ...base, taskStatus: 'assigned', continuationState, leaseOwned: false, leaseUntil: null })).toBe(true)
+    expect(isHermesOneShotStartEligible({ ...base, taskStatus: 'blocked', continuationState, leaseOwned: false, leaseUntil: null })).toBe(true)
+  })
+  it('rejects an active lease while allowing a cleared lease', () => {
+    expect(isHermesOneShotStartEligible({ ...base, leaseOwned: false, leaseUntil: 151 })).toBe(false)
+    expect(isHermesOneShotStartEligible({ ...base, leaseOwned: false, leaseUntil: null, continuationState: 'NO_PROGRESS' })).toBe(true)
+  })
+  it('allows explicit recovery after the automatic sequence wall-clock window expires', () => {
+    expect(isHermesOneShotStartEligible({ ...base, taskStatus: 'assigned', continuationState: 'NO_PROGRESS', leaseOwned: false, leaseUntil: null, sequenceStartedAt: 0, timestamp: 2_000, maxSequenceSeconds: 1_800 })).toBe(true)
+  })
+  it('preserves safety boundaries for pause and terminal task states', () => {
+    expect(isHermesOneShotStartEligible({ ...base, paused: true })).toBe(false)
+    expect(isHermesOneShotStartEligible({ ...base, taskStatus: 'review' })).toBe(false)
+    expect(isHermesOneShotStartEligible({ ...base, taskStatus: 'done' })).toBe(false)
   })
 })

@@ -113,12 +113,11 @@ export function isHermesOneShotStartEligible(input: {
   maxSequenceSeconds: number
   timestamp: number
 }) {
-  if (!input.taskExists || input.taskStatus !== 'in_progress' || !input.autonomous || input.paused || input.activeRun) return false
-  if (!input.continuationExists || !input.continuationEnabled || input.continuationState !== 'RUNNING') return false
-  if (!input.leaseOwned || input.leaseUntil == null || input.leaseUntil < input.timestamp) return false
+  if (!input.taskExists || !['assigned', 'blocked', 'in_progress'].includes(input.taskStatus || '') || !input.autonomous || input.paused || input.activeRun) return false
+  if (!input.continuationExists || !input.continuationEnabled || !['READY', 'WAITING_RETRY', 'NO_PROGRESS'].includes(input.continuationState || '')) return false
+  if (input.leaseUntil != null && input.leaseUntil >= input.timestamp) return false
   if (input.automaticRuns >= input.maxAutomaticRuns) return false
   if (input.cumulativeInputTokens >= input.maxInputTokens || input.cumulativeOutputTokens >= input.maxOutputTokens) return false
-  if (input.sequenceStartedAt != null && input.timestamp - input.sequenceStartedAt >= input.maxSequenceSeconds) return false
   return true
 }
 
@@ -330,7 +329,8 @@ export function finalizeHermesContinuation(task: any, runId: string, outcome: He
 function createHermesRunIfEligible(task: any, model: EffectiveModel, leaseId: string | null, oneShot = false) {
   const db = getDatabase()
   const timestamp = now()
-  return db.transaction(() => {
+  try {
+    return db.transaction(() => {
     const freshTask = db.prepare('SELECT t.*, w.tenant_id FROM tasks t JOIN workspaces w ON w.id=t.workspace_id WHERE t.id=? AND t.workspace_id=?').get(task.id, task.workspace_id) as any
     const continuation = leaseId
       ? db.prepare('SELECT * FROM hermes_coo_continuations WHERE task_id=? AND tenant_id=? AND workspace_id=? AND project_id=?').get(task.id, task.tenant_id, task.workspace_id, task.project_id) as any
@@ -340,7 +340,7 @@ function createHermesRunIfEligible(task: any, model: EffectiveModel, leaseId: st
       taskExists: Boolean(freshTask), taskStatus: freshTask?.status || null,
       autonomous: Boolean(freshTask && autonomousPermitted(freshTask)), paused: isPaused(), activeRun,
       continuationExists: Boolean(continuation), continuationEnabled: continuation?.enabled === 1,
-      continuationState: continuation?.continuation_state || null, leaseOwned: continuation?.lease_id === leaseId,
+      continuationState: continuation?.continuation_state || null, leaseOwned: false,
       leaseUntil: continuation?.lease_until ?? null, automaticRuns: Number(continuation?.automatic_runs || 0),
       maxAutomaticRuns: Number(continuation?.max_automatic_runs || HERMES_CONTINUATION_DEFAULTS.maxAutomaticRuns),
       cumulativeInputTokens: Number(continuation?.cumulative_input_tokens || 0), cumulativeOutputTokens: Number(continuation?.cumulative_output_tokens || 0),
@@ -362,16 +362,30 @@ function createHermesRunIfEligible(task: any, model: EffectiveModel, leaseId: st
       timestamp,
     })
     if (!eligible) {
-      if (leaseId) db.prepare("UPDATE hermes_coo_continuations SET lease_id=NULL,lease_until=NULL,continuation_state=CASE WHEN enabled=1 THEN 'READY' ELSE 'READY' END,updated_at=? WHERE task_id=? AND tenant_id=? AND workspace_id=? AND project_id=? AND lease_id=?").run(timestamp, task.id, task.tenant_id, task.workspace_id, task.project_id, leaseId)
-      db.prepare("UPDATE tasks SET status='assigned',updated_at=? WHERE id=? AND workspace_id=? AND status='in_progress'").run(timestamp, task.id, task.workspace_id)
+      if (!oneShot && leaseId) {
+        db.prepare("UPDATE hermes_coo_continuations SET lease_id=NULL,lease_until=NULL,continuation_state='READY',updated_at=? WHERE task_id=? AND tenant_id=? AND workspace_id=? AND project_id=? AND lease_id=?").run(timestamp, task.id, task.tenant_id, task.workspace_id, task.project_id, leaseId)
+        db.prepare("UPDATE tasks SET status='assigned',updated_at=? WHERE id=? AND workspace_id=? AND status='in_progress'").run(timestamp, task.id, task.workspace_id)
+      }
       return null
     }
     const runId = randomUUID()
     const correlationId = `hermes-coo:${task.id}:${runId}`
+    if (oneShot) {
+      const claimedTask = db.prepare("UPDATE tasks SET status='in_progress',updated_at=? WHERE id=? AND workspace_id=? AND status IN ('assigned','blocked')").run(timestamp, task.id, task.workspace_id)
+      if (claimedTask.changes !== 1) throw new Error('one-shot task claim lost race')
+      const claimedContinuation = db.prepare(`UPDATE hermes_coo_continuations SET continuation_state='RUNNING',lease_id=?,lease_until=?,automatic_runs=automatic_runs+1,sequence_no=sequence_no+1,updated_at=?
+        WHERE task_id=? AND tenant_id=? AND workspace_id=? AND project_id=? AND enabled=1 AND continuation_state IN ('READY','WAITING_RETRY','NO_PROGRESS') AND (lease_until IS NULL OR lease_until < ?) AND automatic_runs < max_automatic_runs`).run(
+        leaseId, timestamp + HERMES_BACKGROUND_LIMITS.maxRunSeconds + 60, timestamp,
+        task.id, task.tenant_id, task.workspace_id, task.project_id, timestamp)
+      if (claimedContinuation.changes !== 1) throw new Error('one-shot continuation claim lost race')
+    }
     db.prepare(`INSERT INTO hermes_coo_runs (run_id,tenant_id,workspace_id,project_id,task_id,agent_id,status,started_at,heartbeat_at,attempt,model_profile_id,provider_id,model_id,last_meaningful_activity,correlation_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(runId, task.tenant_id, task.workspace_id, task.project_id, task.id, task.agent_id, 'RUNNING', timestamp, timestamp, Number(task.dispatch_attempts || 0) + 1, model.profile_id, model.provider_id, model.model_id, 'Run claimed by Mission Control scheduler', correlationId)
     return runId
-  })()
+    })()
+  } catch {
+    return null
+  }
 }
 
 async function executeClaim(task: any, leaseId: string | null = null, oneShot = false, existingRunId?: string, acknowledgeOnly = false): Promise<{ ok: boolean; accepted?: boolean; message: string; run_id?: string }> {
@@ -624,29 +638,31 @@ export async function runHermesBackgroundTick(targetTaskId?: number, oneShot = f
       AND json_extract(COALESCE(t.metadata, '{}'), '$.hermes_autonomous') = 1
       AND EXISTS (SELECT 1 FROM project_agent_assignments paa WHERE paa.project_id = t.project_id AND lower(paa.agent_name) = 'hermes')
       AND t.dispatch_attempts < ?
-      AND ${oneShot ? "(c.enabled=1 AND c.continuation_state='NO_PROGRESS' AND (c.lease_until IS NULL OR c.lease_until < ?))" : "(c.task_id IS NULL OR (c.enabled=1 AND c.continuation_state IN ('READY','WAITING_RETRY') AND c.next_run_at IS NOT NULL AND c.next_run_at <= ? AND (c.lease_until IS NULL OR c.lease_until < ?)))"}
+      AND ${oneShot ? "(c.enabled=1 AND c.continuation_state IN ('READY','WAITING_RETRY','NO_PROGRESS') AND (c.lease_until IS NULL OR c.lease_until < ?))" : "(c.task_id IS NULL OR (c.enabled=1 AND c.continuation_state IN ('READY','WAITING_RETRY') AND c.next_run_at IS NOT NULL AND c.next_run_at <= ? AND (c.lease_until IS NULL OR c.lease_until < ?)))"}
       ${targetTaskId ? 'AND t.id = ?' : ''}
       AND NOT EXISTS (SELECT 1 FROM hermes_coo_runs r WHERE r.tenant_id = w.tenant_id AND r.status IN ('QUEUED','RUNNING','WAITING_FOR_CEO'))
     ORDER BY CASE t.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, t.created_at ASC LIMIT 1`).get(...(oneShot ? [HERMES_BACKGROUND_LIMITS.maxAttempts, timestamp, ...(targetTaskId ? [targetTaskId] : [])] : [HERMES_BACKGROUND_LIMITS.maxAttempts, timestamp, timestamp, ...(targetTaskId ? [targetTaskId] : [])])) as any
   if (!task) return { ok: !oneShot, message: oneShot ? 'Task is not eligible for a bounded one-shot run' : 'No eligible Hermes background task' }
   if (oneShot && !tenantModel(task.tenant_id, task.agent_id, requiresResearch(task), db)) return { ok: false, message: 'Task has no approved Hermes model profile' }
   const previousStatus = task.status
-  const claim = db.prepare(`UPDATE tasks SET status = 'in_progress', updated_at = ? WHERE id = ? AND status ${oneShot ? "IN ('assigned','blocked')" : "= 'assigned'"} AND workspace_id = ?`).run(timestamp, task.id, task.workspace_id)
-  if (claim.changes !== 1) return { ok: false, message: 'Hermes task claim lost race' }
-  let leaseId: string | null = null
-  if (task.continuation_enabled || oneShot) {
-    leaseId = randomUUID()
+  let leaseId: string | null = oneShot ? randomUUID() : null
+  if (!oneShot) {
+    const claim = db.prepare("UPDATE tasks SET status = 'in_progress', updated_at = ? WHERE id = ? AND status = 'assigned' AND workspace_id = ?").run(timestamp, task.id, task.workspace_id)
+    if (claim.changes !== 1) return { ok: false, message: 'Hermes task claim lost race' }
+  }
+  if (task.continuation_enabled && !oneShot) {
     const lease = db.prepare(`UPDATE hermes_coo_continuations SET continuation_state='RUNNING',lease_id=?,lease_until=?,automatic_runs=automatic_runs+1,sequence_no=sequence_no+1,updated_at=?
-      WHERE task_id=? AND tenant_id=? AND workspace_id=? AND project_id=? AND enabled=1 AND ${oneShot ? "continuation_state='NO_PROGRESS'" : "continuation_state IN ('READY','WAITING_RETRY') AND next_run_at IS NOT NULL AND next_run_at <= ?"} AND (lease_until IS NULL OR lease_until < ?)`)
-      .run(...(oneShot ? [leaseId, timestamp + HERMES_BACKGROUND_LIMITS.maxRunSeconds + 60, timestamp, task.id, task.tenant_id, task.workspace_id, task.project_id, timestamp] : [leaseId, timestamp + HERMES_BACKGROUND_LIMITS.maxRunSeconds + 60, timestamp, task.id, task.tenant_id, task.workspace_id, task.project_id, timestamp, timestamp]))
+      WHERE task_id=? AND tenant_id=? AND workspace_id=? AND project_id=? AND enabled=1 AND continuation_state IN ('READY','WAITING_RETRY') AND next_run_at IS NOT NULL AND next_run_at <= ? AND (lease_until IS NULL OR lease_until < ?)`)
+      .run(leaseId, timestamp + HERMES_BACKGROUND_LIMITS.maxRunSeconds + 60, timestamp, task.id, task.tenant_id, task.workspace_id, task.project_id, timestamp, timestamp)
     if (lease.changes !== 1) {
       db.prepare("UPDATE tasks SET status=?,updated_at=? WHERE id=? AND workspace_id=? AND status='in_progress'").run(previousStatus, timestamp, task.id, task.workspace_id)
       return { ok: false, message: 'Hermes continuation claim lost race' }
     }
     if (!oneShot) continuationAudit('COO_CONTINUATION_STARTED', ensureHermesContinuation({ tenantId: task.tenant_id, workspaceId: task.workspace_id, projectId: task.project_id, taskId: task.id }), { reason: 'scheduler lease acquired' })
   }
-  eventBus.broadcast('task.status_changed', { id: task.id, status: 'in_progress', previous_status: previousStatus, workspace_id: task.workspace_id })
-  return executeClaim(task, task.continuation_enabled || oneShot ? leaseId : null, oneShot, undefined, acknowledgeOnly)
+  const result = await executeClaim(task, task.continuation_enabled || oneShot ? leaseId : null, oneShot, undefined, acknowledgeOnly)
+  if (result.ok) eventBus.broadcast('task.status_changed', { id: task.id, status: 'in_progress', previous_status: previousStatus, workspace_id: task.workspace_id })
+  return result
 }
 
 export function getHermesBackgroundStatus(workspaceId?: number) {
