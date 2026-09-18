@@ -374,7 +374,7 @@ function createHermesRunIfEligible(task: any, model: EffectiveModel, leaseId: st
   })()
 }
 
-async function executeClaim(task: any, leaseId: string | null = null, oneShot = false): Promise<{ ok: boolean; message: string; run_id?: string }> {
+async function executeClaim(task: any, leaseId: string | null = null, oneShot = false, existingRunId?: string, acknowledgeOnly = false): Promise<{ ok: boolean; accepted?: boolean; message: string; run_id?: string }> {
   const db = getDatabase()
   const model = tenantModel(task.tenant_id, task.agent_id, requiresResearch(task), db)
   if (!model) {
@@ -383,11 +383,22 @@ async function executeClaim(task: any, leaseId: string | null = null, oneShot = 
     return { ok: false, message: `Task ${task.id} blocked: no approved Hermes model profile` }
   }
 
-  const runId = createHermesRunIfEligible(task, model, leaseId, oneShot)
+  const runId = existingRunId || createHermesRunIfEligible(task, model, leaseId, oneShot)
   if (!runId) return { ok: oneShot ? false : true, message: oneShot ? 'Hermes one-shot run was rejected by the final safety gate' : 'Hermes run start gate rejected stale eligibility' }
   const correlationId = `hermes-coo:${task.id}:${runId}`
-  audit(runId, 'hermes.background_run_started', { task_id: task.id, project_id: task.project_id, provider: model.provider_id, model: model.model_id }, task.workspace_id, task.tenant_id)
-  if (oneShot) logAuditEvent({ action: 'COO_CONTINUE_ONCE_STARTED', actor: 'Mission Control', target_type: 'hermes_coo_run', target_id: task.id, detail: { run_id: runId, task_id: task.id, project_id: task.project_id }, workspace_id: task.workspace_id, tenant_id: task.tenant_id })
+  if (!existingRunId) {
+    audit(runId, 'hermes.background_run_started', { task_id: task.id, project_id: task.project_id, provider: model.provider_id, model: model.model_id }, task.workspace_id, task.tenant_id)
+    if (oneShot) logAuditEvent({ action: 'COO_CONTINUE_ONCE_STARTED', actor: 'Mission Control', target_type: 'hermes_coo_run', target_id: task.id, detail: { run_id: runId, task_id: task.id, project_id: task.project_id }, workspace_id: task.workspace_id, tenant_id: task.tenant_id })
+  }
+
+  if (acknowledgeOnly) {
+    setImmediate(() => {
+      void executeClaim(task, leaseId, oneShot, runId).catch((error) => {
+        logger.error({ runId, taskId: task.id, error }, 'Hermes background one-shot execution failed to start')
+      })
+    })
+    return { ok: true, accepted: true, message: "Hermes accepted bounded one-shot for task " + task.id, run_id: runId }
+  }
 
   const user = backgroundUser(task.tenant_id, task.workspace_id)
   const sessionId = `mc_${task.tenant_id}_${task.workspace_id}_${task.agent_id}_${task.project_id}_bg_${runId.replaceAll('-', '')}`
@@ -592,7 +603,7 @@ async function executeClaim(task: any, leaseId: string | null = null, oneShot = 
   }
 }
 
-export async function runHermesBackgroundTick(targetTaskId?: number, oneShot = false): Promise<{ ok: boolean; message: string; run_id?: string }> {
+export async function runHermesBackgroundTick(targetTaskId?: number, oneShot = false, acknowledgeOnly = false): Promise<{ ok: boolean; accepted?: boolean; message: string; run_id?: string }> {
   const db = getDatabase()
   const timestamp = now()
   recoverStaleResearchClaims()
@@ -635,7 +646,7 @@ export async function runHermesBackgroundTick(targetTaskId?: number, oneShot = f
     if (!oneShot) continuationAudit('COO_CONTINUATION_STARTED', ensureHermesContinuation({ tenantId: task.tenant_id, workspaceId: task.workspace_id, projectId: task.project_id, taskId: task.id }), { reason: 'scheduler lease acquired' })
   }
   eventBus.broadcast('task.status_changed', { id: task.id, status: 'in_progress', previous_status: previousStatus, workspace_id: task.workspace_id })
-  return executeClaim(task, task.continuation_enabled || oneShot ? leaseId : null, oneShot)
+  return executeClaim(task, task.continuation_enabled || oneShot ? leaseId : null, oneShot, undefined, acknowledgeOnly)
 }
 
 export function getHermesBackgroundStatus(workspaceId?: number) {
@@ -696,7 +707,7 @@ export async function continueHermesTaskOnce(taskId: number, workspaceId: number
   if (!task || !autonomousPermitted(task)) throw new Error('Task is not eligible for bounded COO execution')
   if (['done', 'review', 'awaiting_owner'].includes(task.status)) throw new Error('Task is already at a terminal or review boundary')
   logAuditEvent({ action: 'COO_CONTINUE_ONCE_REQUESTED', actor: 'Mission Control', target_type: 'task', target_id: taskId, detail: { tenant_id: task.tenant_id, workspace_id: workspaceId, project_id: task.project_id }, workspace_id: workspaceId, tenant_id: task.tenant_id })
-  const result = await runHermesBackgroundTick(taskId, true)
+  const result = await runHermesBackgroundTick(taskId, true, true)
   if (!result.ok) logAuditEvent({ action: 'COO_CONTINUE_ONCE_REJECTED', actor: 'Mission Control', target_type: 'task', target_id: taskId, detail: { tenant_id: task.tenant_id, workspace_id: workspaceId, project_id: task.project_id, reason: result.message }, workspace_id: workspaceId, tenant_id: task.tenant_id })
   return result
 }
