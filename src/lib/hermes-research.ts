@@ -188,6 +188,7 @@ function isEpiceriesUrl(url: string) { return /^https:\/\/(?:www\.)?epiceries\.c
 function officialEpiceries(row: RequirementEvidence) { return meaningful(row) && isEpiceriesUrl(row.source_url) }
 function text(row: RequirementEvidence) { return `${row.entity || ''} ${row.claim} ${row.evidence_summary}`.toLowerCase() }
 function retailerName(id: string) { return ({ retailer_maxi: 'maxi', retailer_metro: 'metro', retailer_super_c: 'super c', retailer_iga: 'iga', retailer_walmart: 'walmart', retailer_giant_tiger: 'giant tiger' } as Record<string, string>)[id] }
+function retailerStoreValue(id: string) { return ({ retailer_maxi: 'Maxi', retailer_metro: 'Metro', retailer_super_c: 'Super C', retailer_iga: 'IGA', retailer_walmart: 'Walmart', retailer_giant_tiger: 'Giant Tiger' } as Record<string, string>)[id] }
 
 function requirementMatches(requirement: ResearchRequirement, rows: RequirementEvidence[], sources: RequirementSource[], actionRefs: Array<Record<string, unknown>>, statuses: Map<string, ResearchRequirementStatus>) {
   if (requirement.dependsOn?.some((id) => statuses.get(id) !== 'SATISFIED')) return false
@@ -209,8 +210,10 @@ function requirementMatches(requirement: ResearchRequirement, rows: RequirementE
       const rowText = text(row)
       const entity = (row.entity || '').toLowerCase()
       const direct = entity === `retailer:${name}` || entity === name || (entity.includes(name) && entity !== 'source-retrieval')
-      const notFound = /no authoritative source|authoritative source.*not found|not found within.*bounded/i.test(rowText)
-      return (direct && rowText.includes(name)) || (notFound && entity.includes(name))
+      const apiSource = Boolean(row.source_id && row.source_content_type && /json/i.test(row.source_content_type) && isEpiceriesUrl(row.source_url))
+      const observedRetailerData = /(?:store|retailer)\b/i.test(rowText) && /(?:product|price|record|result|api|response)/i.test(rowText)
+      const notFound = /no authoritative source|authoritative source.*not found|not found within.*bounded|did not return.*(?:records|results)|no .*records.*(?:api|query|response)/i.test(rowText)
+      return apiSource && direct && rowText.includes(name) && (observedRetailerData || notFound)
     })
   }
   return false
@@ -367,8 +370,9 @@ export function researchExecutionContract(scope: Pick<Scope, 'tenantId' | 'works
   if (!requirement) return null
   const currentRunSourceIds = sources.filter((source) => source.run_id === runId && source.fetch_outcome === 'SUCCESS' && /epiceries\.ca/i.test(source.url) && /json/i.test(source.content_type)).map((source) => source.id)
   const schemaNeedsCurrentFetch = current.requirement_id === 'epiceries_schema' && currentRunSourceIds.length === 0
-  const requiredActionTypes = schemaNeedsCurrentFetch ? ['FETCH_PUBLIC_JSON_API' as ResearchActionType] : (requirement.requiredActionTypes || [])
-  const usefulActionTypes = schemaNeedsCurrentFetch ? ['FETCH_PUBLIC_JSON_API' as ResearchActionType] : current.requirement_id === 'epiceries_schema' ? ['FETCH_PUBLIC_JSON_API', 'SAVE_RESEARCH_EVIDENCE'] as ResearchActionType[] : (requirement.usefulActionTypes || [])
+  const retailerRequirement = current.requirement_id.startsWith('retailer_')
+  const requiredActionTypes = schemaNeedsCurrentFetch || retailerRequirement ? ['FETCH_PUBLIC_JSON_API' as ResearchActionType] : (requirement.requiredActionTypes || [])
+  const usefulActionTypes = schemaNeedsCurrentFetch ? ['FETCH_PUBLIC_JSON_API' as ResearchActionType] : current.requirement_id === 'epiceries_schema' ? ['FETCH_PUBLIC_JSON_API', 'SAVE_RESEARCH_EVIDENCE'] as ResearchActionType[] : retailerRequirement ? ['FETCH_PUBLIC_JSON_API', 'SAVE_RESEARCH_EVIDENCE'] as ResearchActionType[] : (requirement.usefulActionTypes || [])
   const sourceIds = sources.filter((source) => source.fetch_outcome === 'SUCCESS' && /epiceries\.ca/i.test(source.url)).map((source) => source.id)
   const documentedApiBases = sources.flatMap((source) => source.fetch_outcome === 'SUCCESS' && source.content_excerpt ? [...source.content_excerpt.matchAll(/https:\/\/[A-Za-z0-9.-]+\/api/gi)].map((match) => match[0]) : [])
   const knownFacts = current.requirement_id === 'epiceries_sample'
@@ -382,7 +386,15 @@ export function researchExecutionContract(scope: Pick<Scope, 'tenantId' | 'works
         'Example claim shape: an observed epiceries.ca response exposes an ok/data envelope with pagination and product pricing fields; state only fields present in the fetched response.',
         'Example summary shape: the observed lait response returned data pagination fields and product identity, pricing, retailer, discount, category, URL/link, and updated fields; state only observed fields.',
       ]
-      : []
+      : retailerRequirement
+        ? [
+          `Use the accessible epiceries.ca JSON search API before attempting retailer websites or robots.txt pages: https://epiceries.ca/api?endpoint=search&q=lait&store=${encodeURIComponent(retailerStoreValue(current.requirement_id))}&limit=5.`,
+          `If the store filter value does not match, use the bounded fallback https://epiceries.ca/api?endpoint=search&q=lait&limit=20 and inspect returned product records for store=${retailerStoreValue(current.requirement_id)}.`,
+          `Retailer evidence must use a successful current-run epiceries.ca JSON source_id and identify ${retailerStoreValue(current.requirement_id)} in an observed store or retailer field, or document that the bounded API query did not return ${retailerStoreValue(current.requirement_id)} records.`,
+          'A generic epiceries.ca supported-store list does not satisfy retailer feasibility by itself.',
+          'SAVE_RESEARCH_EVIDENCE still requires a substantive claim, substantive summary, valid classification/entity, and current-run source_id.',
+        ]
+        : []
   const priorContextSourceIds = sourceIds.filter((id) => !currentRunSourceIds.includes(id))
   return {
     requirementId: current.requirement_id,
@@ -392,7 +404,7 @@ export function researchExecutionContract(scope: Pick<Scope, 'tenantId' | 'works
       ? 'No successful FETCH_PUBLIC_JSON_API response is persisted.'
       : current.requirement_id === 'epiceries_schema'
         ? schemaNeedsCurrentFetch ? `Refetch ${EPICERIES_SCHEMA_ENDPOINT} with FETCH_PUBLIC_JSON_API, then save grounded evidence using the returned current-run source_id.` : 'Use the current-run JSON source to save grounded schema evidence.'
-        : requirement.objective,
+        : retailerRequirement ? `Use FETCH_PUBLIC_JSON_API against the accessible epiceries.ca search endpoint for ${retailerStoreValue(current.requirement_id)}, then save retailer-specific evidence from the current-run source.` : requirement.objective,
     knownFacts: [...new Set(knownFacts)],
     relevantSourceIds: current.requirement_id === 'epiceries_schema' ? currentRunSourceIds.slice(-8) : sourceIds.slice(-8),
     currentRunSourceIds: currentRunSourceIds.slice(-8),

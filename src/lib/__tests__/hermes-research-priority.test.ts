@@ -155,6 +155,27 @@ describe('priority-aware resumable research checklist', () => {
     expect(getResearchChecklistState(scope).filter((row) => row.requirement_id.startsWith('retailer_')).every((row) => row.status === 'PENDING')).toBe(true)
   })
 
+  it('guides retailer Maxi research to the accessible JSON API and retailer-specific evidence', () => {
+    ensureResearchChecklist(scope)
+    state.db?.prepare("UPDATE hermes_research_requirements SET status='SATISFIED' WHERE ordinal < 9").run()
+    state.db?.prepare("UPDATE hermes_research_requirements SET status='IN_PROGRESS' WHERE requirement_id='retailer_maxi'").run()
+    const contract = researchExecutionContract(scope, 'retailer_maxi', 'current-run')
+    expect(contract).toMatchObject({ requiredActionTypes: ['FETCH_PUBLIC_JSON_API'], usefulActionTypes: ['FETCH_PUBLIC_JSON_API', 'SAVE_RESEARCH_EVIDENCE'], currentRunSourceIds: [] })
+    expect(contract?.knownFacts.join(' ')).toContain('store=Maxi')
+    expect(contract?.knownFacts.join(' ')).toContain('generic epiceries.ca supported-store list does not satisfy')
+    expect(researchActionCompatibility(scope, 'FETCH_PUBLIC_URL', 'current-run')).toMatchObject({ compatible: false, code: 'ACTION_NOT_COMPATIBLE_WITH_CURRENT_REQUIREMENT' })
+  })
+
+  it('requires retailer evidence to identify observed retailer data from the current-run JSON source', () => {
+    insertSource({ id: 46, url: 'https://epiceries.ca/api?endpoint=search&q=lait&store=Maxi&limit=5', contentType: 'application/json', runId: 'current-run' })
+    state.db?.prepare("INSERT INTO hermes_research_evidence (tenant_id,workspace_id,project_id,task_id,run_id,source_url,source_title,publisher,claim,evidence_summary,confidence,classification,retrieved_at,source_id,entity) VALUES (1,1,7,14,'current-run','https://epiceries.ca/api?endpoint=search&q=lait&store=Maxi&limit=5','Source','Publisher','The current API response has a store field identifying Maxi product price records.','Observed product and price records include store Maxi.','high','VERIFIED',1,46,'retailer:maxi')").run()
+    ensureResearchChecklist(scope)
+    state.db?.prepare("UPDATE hermes_research_requirements SET status='SATISFIED' WHERE ordinal < 9").run()
+    state.db?.prepare("UPDATE hermes_research_requirements SET status='IN_PROGRESS' WHERE requirement_id='retailer_maxi'").run()
+    refreshResearchChecklist(scope)
+    expect(getResearchChecklistState(scope).find((row) => row.requirement_id === 'retailer_maxi')?.status).toBe('SATISFIED')
+  })
+
   it('exposes a compact execution contract and rejects incompatible sample actions before execution', () => {
     insertEvidence({ url: 'https://epiceries.ca/developers', claim: 'Official API documentation describes the categories endpoint.', entity: 'epiceries.ca' })
     expect(beginNextResearchRequirement(scope, 'run-1')?.id).toBe('epiceries_sample')

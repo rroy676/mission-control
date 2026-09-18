@@ -158,7 +158,7 @@ export function classifyHermesRunOutcome(input: {
   if (changed) return 'PROGRESS'
   // A safely rejected model action is a bounded research no-progress result,
   // not an implementation failure. Infrastructure/provider failures remain errors.
-  if (input.error && /evidence is invalid|parameter repair rejected|no progress/i.test(input.error)) return 'NO_PROGRESS'
+  if (input.error && /evidence is invalid|parameter repair rejected|no[_ ]progress|repeated failed (fetches|searches)/i.test(input.error)) return 'NO_PROGRESS'
   if (input.runStatus === 'FAILED' || input.runStatus === 'INTERRUPTED') return input.error === 'Mission Control is PAUSED' ? 'RESEARCH_BLOCKED' : 'SYSTEM_ERROR'
   return 'NO_PROGRESS'
 }
