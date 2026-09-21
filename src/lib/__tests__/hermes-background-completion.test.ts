@@ -101,6 +101,10 @@ describe('bounded continuation outcome classification', () => {
   it('classifies repeated external fetch failures as no progress', () => {
     expect(classifyHermesRunOutcome({ ...base, runStatus: 'FAILED', error: 'NO_PROGRESS_ON_CURRENT_REQUIREMENT: repeated failed fetches; current requirement is retailer_maxi' })).toBe('NO_PROGRESS')
   })
+  it('classifies rejected multi-action research output as no progress', () => {
+    expect(classifyHermesRunOutcome({ ...base, runStatus: 'FAILED', error: 'Hermes research turn rejected: research turn contained multiple actions' })).toBe('NO_PROGRESS')
+    expect(classifyHermesRunOutcome({ ...base, runStatus: 'FAILED', error: 'Hermes research turn rejected: research turn must contain exactly one action' })).toBe('NO_PROGRESS')
+  })
   it('distinguishes provider/system failure from research no progress', () => {
     expect(classifyHermesRunOutcome({ ...base, runStatus: 'FAILED', error: 'OpenRouter unavailable' })).toBe('SYSTEM_ERROR')
     expect(classifyHermesRunOutcome({ ...base, runStatus: 'INTERRUPTED', error: 'Mission Control is PAUSED' })).toBe('RESEARCH_BLOCKED')

@@ -427,7 +427,8 @@ export function researchExecutionContract(scope: Pick<Scope, 'tenantId' | 'works
           : [
             'Current retailer requirement: ' + retailerProfile(current.requirement_id)?.name + '. Expected store values include: ' + retailerProfile(current.requirement_id)?.storeValues.join(', ') + '.',
             'Use the accessible epiceries.ca JSON search API before attempting retailer websites or robots.txt pages. Try bounded store queries: ' + retailerProfile(current.requirement_id)?.queryValues.map((value) => 'https://epiceries.ca/api?endpoint=search&q=lait&store=' + encodeURIComponent(value) + '&limit=5').join(' ; ') + '.',
-            'If the store filter value does not match, use the bounded fallback https://epiceries.ca/api?endpoint=search&q=lait&limit=20 and inspect returned product records for store values matching ' + retailerProfile(current.requirement_id)?.storeValues.join(' or ') + '.',
+            'If the store filter value does not match, emit only one fallback FETCH_PUBLIC_JSON_API action for https://epiceries.ca/api?endpoint=search&q=lait&limit=20 and inspect returned product records for store values matching ' + retailerProfile(current.requirement_id)?.storeValues.join(' or ') + '; do not combine the fallback fetch with SAVE_RESEARCH_EVIDENCE or any other action.',
+            'Every research turn must contain exactly one action; after a failed fetch, the next turn is the single fallback FETCH_PUBLIC_JSON_API action only.',
             'No eligible current-run JSON source is available yet; the next allowed action is FETCH_PUBLIC_JSON_API.',
             'A generic epiceries.ca supported-store list does not satisfy ' + retailerProfile(current.requirement_id)?.name + ' feasibility by itself.',
           ]

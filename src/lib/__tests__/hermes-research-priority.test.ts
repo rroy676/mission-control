@@ -166,6 +166,16 @@ describe('priority-aware resumable research checklist', () => {
     expect(researchActionCompatibility(scope, 'FETCH_PUBLIC_URL', 'current-run')).toMatchObject({ compatible: false, code: 'ACTION_NOT_COMPATIBLE_WITH_CURRENT_REQUIREMENT' })
   })
 
+  it('gives retailer fallback guidance as one FETCH_PUBLIC_JSON_API action', () => {
+    ensureResearchChecklist(scope)
+    state.db?.prepare("UPDATE hermes_research_requirements SET status='IN_PROGRESS' WHERE requirement_id='retailer_metro'").run()
+    const contract = researchExecutionContract(scope, 'retailer_metro', 'new-run')
+    expect(contract?.knownFacts).toEqual(expect.arrayContaining([
+      expect.stringContaining('emit only one fallback FETCH_PUBLIC_JSON_API action'),
+      expect.stringContaining('Every research turn must contain exactly one action'),
+    ]))
+  })
+
   it('prefers SAVE_RESEARCH_EVIDENCE once retailer Maxi has a current-run JSON source', () => {
     insertSource({ id: 47, url: 'https://epiceries.ca/api?endpoint=search&q=lait&limit=20', contentType: 'application/json', runId: 'current-run' })
     state.db?.prepare("UPDATE hermes_research_sources SET content_excerpt=? WHERE id=47").run('{"results":[{"name":"Lait","price":2.49,"store":"Maxi","secret":"do-not-resend"}],"updated":"today"}')
