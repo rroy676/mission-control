@@ -182,6 +182,42 @@ describe('priority-aware resumable research checklist', () => {
     expect(researchActionCompatibility(scope, 'FETCH_PUBLIC_JSON_API', 'current-run')).toMatchObject({ compatible: false, code: 'ACTION_NOT_COMPATIBLE_WITH_CURRENT_REQUIREMENT' })
     expect(researchActionCompatibility(scope, 'SAVE_RESEARCH_EVIDENCE', 'current-run').compatible).toBe(true)
   })
+  it('provides generic current-run evidence guidance for Metro', () => {
+    insertSource({ id: 48, url: 'https://epiceries.ca/api?endpoint=search&q=lait&store=metro&limit=5', contentType: 'application/json', runId: 'current-run' })
+    state.db?.prepare("UPDATE hermes_research_sources SET content_excerpt=? WHERE id=48").run('{"results":[{"name":"Lait","price":2.49,"store":"Metro","updated":"today"}]}')
+    ensureResearchChecklist(scope)
+    state.db?.prepare("UPDATE hermes_research_requirements SET status='SATISFIED' WHERE ordinal < 10").run()
+    state.db?.prepare("UPDATE hermes_research_requirements SET status='IN_PROGRESS' WHERE requirement_id='retailer_metro'").run()
+    const contract = researchExecutionContract(scope, 'retailer_metro', 'current-run')
+    expect(contract).toMatchObject({ requiredActionTypes: ['SAVE_RESEARCH_EVIDENCE'], usefulActionTypes: ['SAVE_RESEARCH_EVIDENCE'], currentRunSourceIds: [48], relevantSourceIds: [48] })
+    expect(contract?.knownFacts.join(' ')).toContain('Current retailer requirement: Metro')
+    expect(contract?.knownFacts.join(' ')).toContain('Current-run source ID 48')
+    expect(contract?.knownFacts.join(' ')).toContain('Claim shape:')
+    expect(contract?.knownFacts.join(' ')).toContain('Summary shape:')
+  })
+
+  it('supports bounded generic retailer query and evidence guidance for every remaining retailer', () => {
+    const retailers = [
+      ['retailer_super_c', 'Super C'],
+      ['retailer_iga', 'IGA/Sobeys'],
+      ['retailer_walmart', 'Walmart Canada'],
+      ['retailer_giant_tiger', 'Giant Tiger'],
+    ] as const
+    for (const [requirementId, name] of retailers) {
+      ensureResearchChecklist(scope)
+      state.db?.prepare("UPDATE hermes_research_requirements SET status='SATISFIED' WHERE ordinal < (SELECT ordinal FROM hermes_research_requirements WHERE requirement_id=?)").run(requirementId)
+      state.db?.prepare("UPDATE hermes_research_requirements SET status='IN_PROGRESS' WHERE requirement_id=?").run(requirementId)
+      const contract = researchExecutionContract(scope, requirementId, 'current-run')
+      expect(contract?.requiredActionTypes).toEqual(['FETCH_PUBLIC_JSON_API'])
+      expect(contract?.usefulActionTypes).toEqual(['FETCH_PUBLIC_JSON_API'])
+      expect(contract?.knownFacts.join(' ')).toContain('Current retailer requirement: ' + name)
+      expect(contract?.knownFacts.join(' ')).toContain('https://epiceries.ca/api?endpoint=search')
+      expect(contract?.knownFacts.join(' ')).toContain('limit=20')
+      expect(contract?.knownFacts.join(' ')).toContain('supported-store list does not satisfy')
+      expect(JSON.stringify(contract)).not.toContain('full source body')
+    }
+  })
+
   it('requires retailer evidence to identify observed retailer data from the current-run JSON source', () => {
     insertSource({ id: 46, url: 'https://epiceries.ca/api?endpoint=search&q=lait&store=Maxi&limit=5', contentType: 'application/json', runId: 'current-run' })
     state.db?.prepare("INSERT INTO hermes_research_evidence (tenant_id,workspace_id,project_id,task_id,run_id,source_url,source_title,publisher,claim,evidence_summary,confidence,classification,retrieved_at,source_id,entity) VALUES (1,1,7,14,'current-run','https://epiceries.ca/api?endpoint=search&q=lait&store=Maxi&limit=5','Source','Publisher','The current API response has a store field identifying Maxi product price records.','Observed product and price records include store Maxi.','high','VERIFIED',1,46,'retailer:maxi')").run()
