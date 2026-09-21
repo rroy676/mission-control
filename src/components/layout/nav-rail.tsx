@@ -128,7 +128,7 @@ const gatewayOnlyPanels = new Set([
   'gateways', 'gateway-config', 'channels', 'nodes', 'exec-approvals',
   ...getPluginNavItems().filter(pi => pi.gatewayOnly).map(pi => pi.id),
 ])
-const adminOnlyPanels = new Set<string>([])
+const adminOnlyPanels = new Set<string>(['model-profiles'])
 
 export function NavRail() {
   const { activeTab, connection, dashboardMode, currentUser, activeTenant, tenants, osUsers, setActiveTenant, fetchTenants, fetchOsUsers, activeProject, projects, setActiveProject, fetchProjects, sidebarExpanded, collapsedGroups, toggleSidebar, toggleGroup, defaultOrgName, interfaceMode, setInterfaceMode } = useMissionControl()
