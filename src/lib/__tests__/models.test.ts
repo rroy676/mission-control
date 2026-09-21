@@ -62,6 +62,14 @@ describe('getModelByAlias', () => {
     expect(haiku!.costPerMTok.input).toBeLessThan(sonnet!.costPerMTok.input)
     expect(haiku!.costPerMTok.output).toBeLessThan(sonnet!.costPerMTok.output)
   })
+
+  it('includes the approved OpenRouter DeepSeek research model', () => {
+    expect(getModelByAlias('deepseek-v4-flash')).toMatchObject({
+      name: 'openrouter/deepseek/deepseek-v4-flash',
+      provider: 'openrouter',
+      contextWindow: 1_000_000,
+    })
+  })
 })
 
 describe('getModelByName', () => {

@@ -62,4 +62,17 @@ describe('tenant model profile isolation and resolution', () => {
     expect(resolveEffectiveModel(alpha, { purpose: 'general' }, db)?.profile_id).toBe(1)
     expect(resolveEffectiveModel(alpha, { purpose: 'research' }, db)?.profile_id).toBe(2)
   })
+
+  it('resolves DeepSeek as research primary with Sonnet as explicit fallback', () => {
+    db.prepare("INSERT INTO model_provider_catalog (provider_id,model_id,display_name) VALUES ('openrouter','anthropic/claude-sonnet-4.6','Research Sonnet')").run()
+    db.prepare("INSERT INTO model_provider_catalog (provider_id,model_id,display_name) VALUES ('openrouter','deepseek/deepseek-v4-flash','DeepSeek V4 Flash')").run()
+    profile(1, 12, 'openrouter/openai/gpt-4.1-mini')
+    profile(1, 10, 'openrouter/anthropic/claude-sonnet-4.6', 'tenant-default', null, null, 'research')
+    profile(1, 11, 'openrouter/deepseek/deepseek-v4-flash', 'tenant-default', null, 10, 'research')
+    db.prepare('UPDATE tenant_model_profiles SET priority=5 WHERE id=11').run()
+    const effective = resolveEffectiveModel(alpha, { purpose: 'research', taskId: 14 }, db)
+    expect(effective).toMatchObject({ provider_id: 'openrouter', model_id: 'deepseek/deepseek-v4-flash', profile_id: 11 })
+    expect(effective?.fallback_chain).toEqual([10])
+    expect(resolveEffectiveModel(alpha, { purpose: 'general' }, db)?.model_id).toBe('openai/gpt-4.1-mini')
+  })
 })

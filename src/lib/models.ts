@@ -47,6 +47,8 @@ export const MODEL_CATALOG: ModelConfig[] = [
   // Google — https://ai.google.dev/gemini-api/docs/pricing (verified 2026-07-04; Pro rates are the <=200K-token-prompt tier)
   { alias: 'gemini-2.5-pro', name: 'google/gemini-2.5-pro', provider: 'google', description: 'Gemini 2.5 Pro', costPerMTok: { input: 1.25, output: 10.0 } },
   { alias: 'gemini-2.5-flash', name: 'google/gemini-2.5-flash', provider: 'google', description: 'Gemini 2.5 Flash, fast', costPerMTok: { input: 0.3, output: 2.5 } },
+  // OpenRouter / DeepSeek — https://openrouter.ai/deepseek/deepseek-v4-flash/pricing
+  { alias: 'deepseek-v4-flash', name: 'openrouter/deepseek/deepseek-v4-flash', provider: 'openrouter', description: 'DeepSeek V4 Flash, routine research', costPerMTok: { input: 0.0679, output: 0.168, cacheRead: 0.0168 }, contextWindow: 1_000_000 },
   // Local / open-source
   { alias: 'deepseek', name: 'ollama/deepseek-r1:14b', provider: 'ollama', description: 'Local reasoning (free)', costPerMTok: { input: 0.0, output: 0.0 } },
   // Groq (hosted inference) — https://groq.com/pricing (verified 2026-07-04)
