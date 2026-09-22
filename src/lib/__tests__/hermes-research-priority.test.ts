@@ -192,6 +192,44 @@ describe('priority-aware resumable research checklist', () => {
     expect(researchActionCompatibility(scope, 'FETCH_PUBLIC_JSON_API', 'current-run')).toMatchObject({ compatible: false, code: 'ACTION_NOT_COMPATIBLE_WITH_CURRENT_REQUIREMENT' })
     expect(researchActionCompatibility(scope, 'SAVE_RESEARCH_EVIDENCE', 'current-run').compatible).toBe(true)
   })
+  it('tries lowercase Metro aliases before uppercase and broad fallback', () => {
+    ensureResearchChecklist(scope)
+    state.db?.prepare("UPDATE hermes_research_requirements SET status='SATISFIED' WHERE ordinal < 10").run()
+    state.db?.prepare("UPDATE hermes_research_requirements SET status='IN_PROGRESS' WHERE requirement_id='retailer_metro'").run()
+    const contract = researchExecutionContract(scope, 'retailer_metro', 'current-run')
+    const facts = contract?.knownFacts.join(' ') || ''
+    expect(facts.indexOf('store=metro')).toBeGreaterThanOrEqual(0)
+    expect(facts.indexOf('store=metro')).toBeLessThan(facts.indexOf('store=Metro'))
+    expect(facts).toContain('store=Metro')
+    expect(facts).toContain('limit=20')
+  })
+
+  it('does not expose a broad source as Metro evidence without observed Metro records', () => {
+    insertSource({ id: 49, url: 'https://epiceries.ca/api?endpoint=search&q=lait&limit=20', contentType: 'application/json', runId: 'current-run' })
+    state.db?.prepare("UPDATE hermes_research_sources SET content_excerpt=? WHERE id=49").run('{"results":[{"name":"Lait","price":2.49,"store":"Walmart"}]}')
+    ensureResearchChecklist(scope)
+    state.db?.prepare("UPDATE hermes_research_requirements SET status='SATISFIED' WHERE ordinal < 10").run()
+    state.db?.prepare("UPDATE hermes_research_requirements SET status='IN_PROGRESS' WHERE requirement_id='retailer_metro'").run()
+    const contract = researchExecutionContract(scope, 'retailer_metro', 'current-run')
+    expect(contract).toMatchObject({ requiredActionTypes: ['FETCH_PUBLIC_JSON_API'], usefulActionTypes: ['FETCH_PUBLIC_JSON_API'], currentRunSourceIds: [], relevantSourceIds: [] })
+    expect(contract?.knownFacts.join(' ')).toContain('store=metro')
+    expect(contract?.knownFacts.join(' ')).not.toContain('Eligible current-run source IDs for evidence: 49')
+  })
+
+  it('allows a broad source for Metro only when observed Metro records are present', () => {
+    insertSource({ id: 50, url: 'https://epiceries.ca/api?endpoint=search&q=lait&limit=20', contentType: 'application/json', runId: 'current-run' })
+    state.db?.prepare("UPDATE hermes_research_sources SET content_excerpt=? WHERE id=50").run('{"results":[{"name":"Lait","price":2.49,"store":"metro","unitPrice":1.2}]}')
+    ensureResearchChecklist(scope)
+    state.db?.prepare("UPDATE hermes_research_requirements SET status='SATISFIED' WHERE ordinal < 10").run()
+    state.db?.prepare("UPDATE hermes_research_requirements SET status='IN_PROGRESS' WHERE requirement_id='retailer_metro'").run()
+    const contract = researchExecutionContract(scope, 'retailer_metro', 'current-run')
+    expect(contract).toMatchObject({ requiredActionTypes: ['SAVE_RESEARCH_EVIDENCE'], usefulActionTypes: ['SAVE_RESEARCH_EVIDENCE'], currentRunSourceIds: [50], relevantSourceIds: [50] })
+    expect(contract?.knownFacts.join(' ')).toContain('observed store values: metro')
+    expect(contract?.knownFacts.join(' ')).toContain('Eligible current-run source IDs for evidence: 50')
+    expect(contract?.knownFacts.join(' ')).toContain('Claim shape:')
+    expect(contract?.knownFacts.join(' ')).toContain('Summary shape:')
+  })
+
   it('provides generic current-run evidence guidance for Metro', () => {
     insertSource({ id: 48, url: 'https://epiceries.ca/api?endpoint=search&q=lait&store=metro&limit=5', contentType: 'application/json', runId: 'current-run' })
     state.db?.prepare("UPDATE hermes_research_sources SET content_excerpt=? WHERE id=48").run('{"results":[{"name":"Lait","price":2.49,"store":"Metro","updated":"today"}]}')

@@ -189,12 +189,12 @@ function officialEpiceries(row: RequirementEvidence) { return meaningful(row) &&
 function text(row: RequirementEvidence) { return `${row.entity || ''} ${row.claim} ${row.evidence_summary}`.toLowerCase() }
 type RetailerProfile = { name: string; storeValues: readonly string[]; queryValues: readonly string[] }
 const RETAILER_PROFILES: Record<string, RetailerProfile> = {
-  retailer_maxi: { name: 'Maxi', storeValues: ['Maxi'], queryValues: ['Maxi'] },
-  retailer_metro: { name: 'Metro', storeValues: ['Metro'], queryValues: ['Metro'] },
-  retailer_super_c: { name: 'Super C', storeValues: ['Super C', 'super_c'], queryValues: ['Super C', 'super_c'] },
-  retailer_iga: { name: 'IGA/Sobeys', storeValues: ['IGA', 'Sobeys'], queryValues: ['IGA'] },
-  retailer_walmart: { name: 'Walmart Canada', storeValues: ['Walmart', 'Walmart Canada'], queryValues: ['Walmart', 'Walmart Canada'] },
-  retailer_giant_tiger: { name: 'Giant Tiger', storeValues: ['Giant Tiger', 'giant_tiger'], queryValues: ['Giant Tiger', 'giant_tiger'] },
+  retailer_maxi: { name: 'Maxi', storeValues: ['Maxi'], queryValues: ['maxi', 'Maxi'] },
+  retailer_metro: { name: 'Metro', storeValues: ['Metro'], queryValues: ['metro', 'Metro'] },
+  retailer_super_c: { name: 'Super C', storeValues: ['Super C', 'super_c'], queryValues: ['super-c', 'super_c', 'Super C'] },
+  retailer_iga: { name: 'IGA/Sobeys', storeValues: ['IGA', 'Sobeys'], queryValues: ['iga', 'IGA', 'Sobeys'] },
+  retailer_walmart: { name: 'Walmart Canada', storeValues: ['Walmart', 'Walmart Canada'], queryValues: ['walmart', 'Walmart', 'Walmart Canada'] },
+  retailer_giant_tiger: { name: 'Giant Tiger', storeValues: ['Giant Tiger', 'giant_tiger'], queryValues: ['giant-tiger', 'giant_tiger', 'Giant Tiger'] },
 }
 function retailerProfile(id: string) { return RETAILER_PROFILES[id] }
 function retailerName(id: string) { return retailerProfile(id)?.name.toLowerCase() }
@@ -371,17 +371,27 @@ function observedEpiceriesSchemaFacts(sources: Array<RequirementSource & { conte
   return observed.size >= 3 ? [`Observed epiceries.ca JSON fields only: ${EPICERIES_SCHEMA_FIELDS.filter((field) => observed.has(field)).join(', ')}.`] : []
 }
 
+function retailerObservedStoreValues(source: { content_excerpt?: string }) {
+  const excerpt = source.content_excerpt || ''
+  return [...excerpt.matchAll(/(?:["'](?:store|retailer)["']\s*:\s*["'])([^"']+)/gi)].map((match) => match[1]).filter(Boolean)
+}
+
+function retailerSourceMatchesProfile(source: { content_excerpt?: string }, profile: RetailerProfile) {
+  const expected = new Set(profile.storeValues.map((value) => value.toLowerCase()))
+  return retailerObservedStoreValues(source).some((value) => expected.has(value.toLowerCase()))
+}
+
 function retailerCurrentRunFacts(sources: Array<RequirementSource & { content_excerpt?: string; run_id?: string }>, sourceIds: number[], retailer: string) {
   const facts: string[] = []
   for (const source of sources.filter((item) => sourceIds.includes(item.id))) {
     const excerpt = source.content_excerpt || ''
-    const fields = EPICERIES_SCHEMA_FIELDS.filter((field) => new RegExp('(?:[\"\']' + field + '[\"\']\\s*:)', 'i').test(excerpt))
-    const stores = [...excerpt.matchAll(/(?:[\"']store[\"']\s*:\s*[\"'])([^\"']+)/gi)].map((match) => match[1]).filter(Boolean).slice(0, 3)
+    const fields = EPICERIES_SCHEMA_FIELDS.filter((field) => new RegExp('(?:["\']' + field + '["\']\\s*:)', 'i').test(excerpt))
+    const stores = retailerObservedStoreValues(source).slice(0, 3)
     facts.push('Current-run source ID ' + source.id + ': ' + source.url + ' (HTTP ' + (source.http_status ?? 'unknown') + ', ' + source.fetch_outcome + ').')
     if (fields.length) facts.push('Source ' + source.id + ' observed JSON fields: ' + fields.join(', ') + '.')
     if (stores.length) facts.push('Source ' + source.id + ' observed store values: ' + [...new Set(stores)].join(', ') + '.')
   }
-  if (facts.length && !facts.some((fact) => fact.toLowerCase().includes(retailer.toLowerCase()))) facts.push('Inspect the observed store/retailer fields in these current-run sources for ' + retailer + '.')
+  if (facts.length && !facts.some((fact) => fact.toLowerCase().includes(retailer.toLowerCase()))) facts.push('Observed retailer records in these sources identify ' + retailer + '.')
   return facts
 }
 
@@ -395,7 +405,11 @@ export function researchExecutionContract(scope: Pick<Scope, 'tenantId' | 'works
   const currentRunSourceIds = sources.filter((source) => source.run_id === runId && source.fetch_outcome === 'SUCCESS' && /epiceries\.ca/i.test(source.url) && /json/i.test(source.content_type)).map((source) => source.id)
   const schemaNeedsCurrentFetch = current.requirement_id === 'epiceries_schema' && currentRunSourceIds.length === 0
   const retailerRequirement = current.requirement_id.startsWith('retailer_')
-  const retailerSourceAvailable = retailerRequirement && currentRunSourceIds.length > 0
+  const retailerProfileForRequirement = retailerRequirement ? retailerProfile(current.requirement_id) : undefined
+  const retailerCurrentRunSourceIds = retailerProfileForRequirement
+    ? sources.filter((source) => currentRunSourceIds.includes(source.id) && retailerSourceMatchesProfile(source, retailerProfileForRequirement)).map((source) => source.id)
+    : []
+  const retailerSourceAvailable = retailerRequirement && retailerCurrentRunSourceIds.length > 0
   const retailerNextAction = retailerSourceAvailable ? 'SAVE_RESEARCH_EVIDENCE' as ResearchActionType : 'FETCH_PUBLIC_JSON_API' as ResearchActionType
   const requiredActionTypes = schemaNeedsCurrentFetch ? ['FETCH_PUBLIC_JSON_API' as ResearchActionType] : retailerRequirement ? [retailerNextAction] : (requirement.requiredActionTypes || [])
   const usefulActionTypes = schemaNeedsCurrentFetch ? ['FETCH_PUBLIC_JSON_API' as ResearchActionType] : current.requirement_id === 'epiceries_schema' ? ['FETCH_PUBLIC_JSON_API', 'SAVE_RESEARCH_EVIDENCE'] as ResearchActionType[] : retailerRequirement ? [retailerNextAction] : (requirement.usefulActionTypes || [])
@@ -416,8 +430,8 @@ export function researchExecutionContract(scope: Pick<Scope, 'tenantId' | 'works
         ? retailerSourceAvailable
           ? [
             'Current retailer requirement: ' + retailerProfile(current.requirement_id)?.name + '. Expected store values include: ' + retailerProfile(current.requirement_id)?.storeValues.join(', ') + '.',
-            ...retailerCurrentRunFacts(sources, currentRunSourceIds, retailerStoreValue(current.requirement_id)),
-            'Eligible current-run source IDs for evidence: ' + currentRunSourceIds.join(', ') + '.',
+            ...retailerCurrentRunFacts(sources, retailerCurrentRunSourceIds, retailerStoreValue(current.requirement_id)),
+            'Eligible current-run source IDs for evidence: ' + retailerCurrentRunSourceIds.join(', ') + '.',
             'Next allowed action: SAVE_RESEARCH_EVIDENCE for ' + retailerProfile(current.requirement_id)?.name + ' using one eligible source_id; do not fetch another broad page.',
             'Claim shape: the epiceries.ca JSON search API returned current-run product-price records whose observed store field identifies ' + retailerProfile(current.requirement_id)?.name + ', supporting retailer-specific price data availability.',
             'Summary shape: the current-run JSON response included observed product fields such as name, size, price, unitPrice, store, category, discounted, link/url, and updated; state only fields actually observed.',
@@ -444,8 +458,8 @@ export function researchExecutionContract(scope: Pick<Scope, 'tenantId' | 'works
         ? schemaNeedsCurrentFetch ? `Refetch ${EPICERIES_SCHEMA_ENDPOINT} with FETCH_PUBLIC_JSON_API, then save grounded evidence using the returned current-run source_id.` : 'Use the current-run JSON source to save grounded schema evidence.'
         : retailerRequirement ? retailerSourceAvailable ? 'Use SAVE_RESEARCH_EVIDENCE with an eligible current-run source_id for ' + retailerProfile(current.requirement_id)?.name + '.' : 'Use FETCH_PUBLIC_JSON_API against the accessible epiceries.ca search endpoint for ' + retailerProfile(current.requirement_id)?.name + ', then save retailer-specific evidence from the current-run source.' : requirement.objective,
     knownFacts: [...new Set(knownFacts)],
-    relevantSourceIds: current.requirement_id === 'epiceries_schema' || retailerRequirement ? currentRunSourceIds.slice(-8) : sourceIds.slice(-8),
-    currentRunSourceIds: currentRunSourceIds.slice(-8),
+    relevantSourceIds: current.requirement_id === 'epiceries_schema' ? currentRunSourceIds.slice(-8) : retailerRequirement ? retailerCurrentRunSourceIds.slice(-8) : sourceIds.slice(-8),
+    currentRunSourceIds: retailerRequirement ? retailerCurrentRunSourceIds.slice(-8) : currentRunSourceIds.slice(-8),
     priorContextSourceIds: priorContextSourceIds.slice(-8),
   }
 }
