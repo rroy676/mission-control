@@ -65,9 +65,13 @@ function privateIp(address: string) {
 }
 
 type DnsResolver = (hostname: string, options: { all: true }) => Promise<Array<{ address: string }>>
+export function normalizeResearchUrl(raw: string) {
+  return raw.replace(/&(?:amp|#38|#x26);/gi, '&')
+}
+
 export async function validatePublicHttpsUrl(raw: string, resolve: DnsResolver = dns.lookup as DnsResolver): Promise<URL> {
   let url: URL
-  try { url = new URL(raw) } catch { throw new Error('Only public HTTPS URLs are allowed') }
+  try { url = new URL(normalizeResearchUrl(raw)) } catch { throw new Error('Only public HTTPS URLs are allowed') }
   if (url.protocol !== 'https:' || url.username || url.password || url.port && url.port !== '443') throw new Error('Only public HTTPS URLs are allowed')
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '')
   if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host === 'metadata.google.internal') throw new Error('Private and metadata hosts are not allowed')
@@ -99,9 +103,11 @@ async function boundedFetch(rawUrl: string, kind: 'html' | 'json', scope: Scope)
 }
 
 export function persistResearchSource(scope: Scope, input: { url: string; finalUrl?: string; title?: string; publisher?: string; httpStatus?: number; contentType?: string; contentExcerpt?: string; contentHash?: string; outcome?: string; selected?: boolean; rejectionReason?: string }) {
+  const normalizedUrl = normalizeResearchUrl(input.url)
+  const normalizedFinalUrl = normalizeResearchUrl(input.finalUrl || normalizedUrl)
   const db = getDatabase()
   const result = db.prepare(`INSERT INTO hermes_research_sources (tenant_id,workspace_id,project_id,task_id,run_id,url,content_type,content_excerpt,retrieved_at,final_url,title,publisher,http_status,content_hash,fetch_outcome,selected,rejection_reason)
-    VALUES (?,?,?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?)`).run(scope.tenantId, scope.workspaceId, scope.projectId, scope.taskId, scope.runId, input.url, (input.contentType || '').slice(0, 120), (input.contentExcerpt || '').slice(0, HERMES_RESEARCH_LIMITS.maxTextBytes), input.finalUrl || input.url, (input.title || '').slice(0, 500), (input.publisher || new URL(input.url).hostname).slice(0, 200), input.httpStatus ?? null, input.contentHash || null, input.outcome || 'SUCCESS', input.selected ? 1 : 0, input.rejectionReason || null)
+    VALUES (?,?,?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?)`).run(scope.tenantId, scope.workspaceId, scope.projectId, scope.taskId, scope.runId, normalizedUrl, (input.contentType || '').slice(0, 120), (input.contentExcerpt || '').slice(0, HERMES_RESEARCH_LIMITS.maxTextBytes), normalizedFinalUrl, (input.title || '').slice(0, 500), (input.publisher || new URL(normalizedUrl).hostname).slice(0, 200), input.httpStatus ?? null, input.contentHash || null, input.outcome || 'SUCCESS', input.selected ? 1 : 0, input.rejectionReason || null)
   return Number(result.lastInsertRowid)
 }
 

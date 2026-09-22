@@ -8,7 +8,7 @@ vi.mock('@/lib/db', () => ({
   logAuditEvent: state.audit,
 }))
 
-import { beginNextResearchRequirement, compactResearchContext, ensureResearchChecklist, getResearchChecklistState, recoverStaleResearchClaims, refreshResearchChecklist, researchActionCompatibility, researchExecutionContract } from '@/lib/hermes-research'
+import { beginNextResearchRequirement, compactResearchContext, ensureResearchChecklist, getResearchChecklistState, persistResearchSource, recoverStaleResearchClaims, refreshResearchChecklist, researchActionCompatibility, researchExecutionContract } from '@/lib/hermes-research'
 
 const scope = { tenantId: 1, workspaceId: 1, projectId: 7, taskId: 14 }
 
@@ -48,7 +48,7 @@ describe('priority-aware resumable research checklist', () => {
       );
       CREATE TABLE hermes_research_sources (
         id INTEGER PRIMARY KEY, tenant_id INTEGER, workspace_id INTEGER, project_id INTEGER, task_id INTEGER,
-        run_id TEXT, url TEXT, content_type TEXT, content_excerpt TEXT, http_status INTEGER, fetch_outcome TEXT
+        run_id TEXT, url TEXT, content_type TEXT, content_excerpt TEXT, retrieved_at INTEGER, final_url TEXT, title TEXT, publisher TEXT, http_status INTEGER, content_hash TEXT, fetch_outcome TEXT, selected INTEGER, rejection_reason TEXT
       );
     `)
   })
@@ -57,6 +57,21 @@ describe('priority-aware resumable research checklist', () => {
     state.db?.close()
     state.db = null
     state.audit.mockReset()
+  })
+
+  it('persists normalized source URLs', () => {
+    const id = persistResearchSource({ ...scope, runId: 'current-run' }, {
+      url: 'https://epiceries.ca/api?endpoint=search&amp;q=lait&amp;store=metro&amp;limit=5',
+      finalUrl: 'https://epiceries.ca/api?endpoint=search&amp;q=lait&amp;store=metro&amp;limit=5',
+      contentType: 'application/json',
+      contentExcerpt: '{}',
+      httpStatus: 200,
+      outcome: 'SUCCESS',
+    })
+    expect(state.db?.prepare('SELECT url,final_url FROM hermes_research_sources WHERE id=?').get(id)).toEqual({
+      url: 'https://epiceries.ca/api?endpoint=search&q=lait&store=metro&limit=5',
+      final_url: 'https://epiceries.ca/api?endpoint=search&q=lait&store=metro&limit=5',
+    })
   })
 
   it('selects the highest-priority unmet requirement first', () => {
